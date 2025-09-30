@@ -8,9 +8,9 @@ import threading
 app = Flask(__name__)
 
 
-especies = tf.keras.models.load_model(r"C:\Users\victo\Desktop\Modelos tf2.19.0\modelo_especies.h5")
-formas = tf.keras.models.load_model(r"C:\Users\victo\Desktop\Modelos tf2.19.0\modelo_hojas.h5")
-plantas = tf.keras.models.load_model(r"C:\Users\victo\Desktop\Modelos tf2.19.0\modelo_plantas.h5")
+especies = tf.keras.models.load_model("/home/ubuntu/Proyecto/ClassifierApp/modelo_especies.h5")
+formas = tf.keras.models.load_model("/home/ubuntu/Proyecto/ClassifierApp/modelo_hojas.h5")
+plantas = tf.keras.models.load_model("/home/ubuntu/Proyecto/ClassifierApp/modelo_plantas.h5")
 
 
 PLANTS = [
