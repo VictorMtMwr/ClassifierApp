@@ -1,5 +1,5 @@
 flask==2.3.2
-tensorflow==2.13.0
-numpy==1.24.3
-pillow==9.5.0
+tensorflow==2.19.0
+numpy==1.26.4
+pillow==10.3.0
 waitress==2.1.2
