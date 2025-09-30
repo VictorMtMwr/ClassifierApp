@@ -5,7 +5,9 @@ from PIL import Image
 import io
 import threading
 
+
 app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024  
 
 
 especies = tf.keras.models.load_model("/home/ubuntu/Proyecto/ClassifierApp/modelo_especies.h5")
