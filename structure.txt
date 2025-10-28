@@ -1,0 +1,22 @@
+ClassifierApp/
+│
+├── app/
+│   ├── __init__.py          # Inicializa Flask, configura app y modelos
+│   ├── config.py            # Configuración general (paths, límites, etc.)
+│   ├── models_loader.py     # Carga y gestión de los modelos TensorFlow
+│   ├── preprocess.py        # Funciones de preprocesamiento de imágenes
+│   ├── routes/
+│   │   ├── __init__.py
+│   │   ├── predict.py       # Endpoint /predict
+│   │   └── retrain.py       # Endpoint /retrain
+│   └── utils/
+│       ├── locks.py         # Manejadores de threading y seguridad
+│       └── helpers.py       # Funciones utilitarias (guardar logs, etc.)
+│
+├── data/                    # Dataset
+├── models/                  # Modelos .h5
+├── backups/                 # Respaldo de los modelos .h5 por si falla el entrenamiento o la carga.
+├── logs/                    # Logs de predicción y entrenamiento
+├── main.py                  # Punto de entrada (run server)
+└── requirements.txt
+
