@@ -4,7 +4,7 @@ import tensorflow as tf
 import os
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from ..config import MODEL_DIR, DATA_DIR, BACKUP_DIR, MAX_BACKUPS
-from ..utils.label_detector import detect_new_classes, update_config_with_new_classes, adjust_model_for_new_classes
+from ..utils.label_detector import detect_new_classes, update_config_with_new_classes, adjust_model_for_new_classes, reload_config
 
 bp = Blueprint('retrain', __name__)
 
@@ -41,8 +41,12 @@ def init_retrain_route():
                 # Actualizar configuración con nuevas clases
                 if class_info['new_classes']:
                     print(f"Actualizando configuración con nuevas clases...")
-                    update_config_with_new_classes(model_name, class_info['new_classes'])
-                    print("Configuración actualizada exitosamente.")
+                    if update_config_with_new_classes(model_name, class_info['new_classes']):
+                        # Recargar la configuración para aplicar los cambios
+                        reload_config()
+                        print("Configuración actualizada y recargada exitosamente.")
+                    else:
+                        print("Error al actualizar la configuración.")
             else:
                 print(f"No se detectaron cambios en las clases para {model_name}")
 
@@ -164,5 +168,36 @@ def init_retrain_route():
             "has_changes": class_info['has_changes'],
             "message": f"Clases detectadas: {len(class_info['detected_classes'])}, Clases actuales: {len(class_info['current_classes'])}"
         })
+    
+    @bp.route('/update-config', methods=['POST'])
+    def update_config():
+        """Endpoint para actualizar la configuración con nuevas clases detectadas"""
+        model_name = request.args.get('model')
+        if model_name not in ['especies', 'hojas', 'plantas']:
+            return jsonify({
+                "error": "Debes especificar ?model=especies | hojas | plantas"
+            }), 400
+        
+        class_info = detect_new_classes(model_name)
+        
+        if class_info['new_classes']:
+            if update_config_with_new_classes(model_name, class_info['new_classes']):
+                reload_config()
+                return jsonify({
+                    "status": "success",
+                    "model": model_name,
+                    "new_classes_added": class_info['new_classes'],
+                    "message": f"Configuración actualizada con {len(class_info['new_classes'])} nuevas clases"
+                })
+            else:
+                return jsonify({
+                    "status": "error",
+                    "message": "Error al actualizar la configuración"
+                }), 500
+        else:
+            return jsonify({
+                "status": "info",
+                "message": "No hay nuevas clases para actualizar"
+            })
     
     return bp

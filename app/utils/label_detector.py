@@ -1,5 +1,7 @@
 import os
 import json
+import importlib
+import sys
 from ..config import DATA_DIR, MODEL_DIR
 
 
@@ -83,6 +85,9 @@ def update_config_with_new_classes(model_type, new_classes):
         model_type (str): Tipo de modelo ('especies', 'hojas', 'plantas')
         new_classes (list): Lista de nuevas clases a agregar
     """
+    if not new_classes:
+        return True
+    
     config_path = os.path.join(os.path.dirname(__file__), '..', 'config.py')
     
     # Leer el archivo de configuración actual
@@ -92,24 +97,43 @@ def update_config_with_new_classes(model_type, new_classes):
     # Obtener las clases actuales
     current_classes = get_current_classes(model_type)
     
-    # Crear la nueva lista de clases
-    updated_classes = current_classes + new_classes
+    # Crear la nueva lista de clases (evitar duplicados)
+    updated_classes = list(current_classes)
+    for new_class in new_classes:
+        if new_class not in updated_classes:
+            updated_classes.append(new_class)
     
     # Determinar el nombre de la variable según el tipo de modelo
     if model_type == 'especies':
         var_name = 'SPECIES'
-        # Formatear como lista de strings
-        new_content = str(updated_classes)
+        # Formatear como lista de strings con saltos de línea para legibilidad
+        formatted_classes = []
+        for i, cls in enumerate(updated_classes):
+            if i == 0:
+                formatted_classes.append(f"    '{cls}'")
+            else:
+                formatted_classes.append(f"    '{cls}'")
+        new_content = "[\n" + ",\n".join(formatted_classes) + "\n]"
+        
     elif model_type == 'hojas':
         var_name = 'SHAPES'
-        # Formatear como lista de strings
-        new_content = str(updated_classes)
+        # Formatear como lista de strings con saltos de línea para legibilidad
+        formatted_classes = []
+        for i, cls in enumerate(updated_classes):
+            if i == 0:
+                formatted_classes.append(f"    '{cls}'")
+            else:
+                formatted_classes.append(f"    '{cls}'")
+        new_content = "[\n" + ",\n".join(formatted_classes) + "\n]"
+        
     elif model_type == 'plantas':
         var_name = 'PLANTS'
         # Convertir strings de vuelta a booleanos
         bool_classes = []
         for cls in updated_classes:
-            if cls.lower() in ['true', '1', 'yes']:
+            if isinstance(cls, bool):
+                bool_classes.append(cls)
+            elif cls.lower() in ['true', '1', 'yes']:
                 bool_classes.append(True)
             elif cls.lower() in ['false', '0', 'no']:
                 bool_classes.append(False)
@@ -122,16 +146,43 @@ def update_config_with_new_classes(model_type, new_classes):
     
     # Reemplazar la línea correspondiente en el archivo de configuración
     import re
-    pattern = rf"^{var_name}\s*=\s*\[.*?\]"
-    replacement = f"{var_name} = {new_content}"
     
-    new_content = re.sub(pattern, replacement, content, flags=re.MULTILINE | re.DOTALL)
+    # Patrón más específico para capturar la variable completa
+    if model_type in ['especies', 'hojas']:
+        pattern = rf"^{var_name}\s*=\s*\[.*?\]"
+        replacement = f"{var_name} = {new_content}"
+    else:  # plantas
+        pattern = rf"^{var_name}\s*=\s*\[.*?\]"
+        replacement = f"{var_name} = {new_content}"
+    
+    new_file_content = re.sub(pattern, replacement, content, flags=re.MULTILINE | re.DOTALL)
+    
+    # Verificar que el reemplazo fue exitoso
+    if new_file_content == content:
+        print(f"Advertencia: No se pudo actualizar {var_name} en config.py")
+        return False
     
     # Escribir el archivo actualizado
     with open(config_path, 'w', encoding='utf-8') as f:
-        f.write(new_content)
+        f.write(new_file_content)
     
+    print(f"Configuración actualizada: {var_name} ahora incluye {len(updated_classes)} clases")
     return True
+
+
+def reload_config():
+    """
+    Recarga el módulo de configuración para aplicar los cambios sin reiniciar la aplicación.
+    """
+    try:
+        # Recargar el módulo de configuración
+        if 'app.config' in sys.modules:
+            importlib.reload(sys.modules['app.config'])
+            print("Configuración recargada exitosamente")
+            return True
+    except Exception as e:
+        print(f"Error al recargar configuración: {e}")
+        return False
 
 
 def adjust_model_for_new_classes(model, model_type, new_classes):

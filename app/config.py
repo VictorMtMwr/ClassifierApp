@@ -13,11 +13,28 @@ PORT = 5000
 DEBUG = True
 
 PLANTS = [False, True]
-SHAPES = ['Eliptica', 'Imparipinnada', 'Lanceolada', 'Obovada', 'Ovada', 'Palmeada', 'Trifoliada', 'nueva_forma']
+SHAPES = [
+    'Eliptica',
+    'Imparipinnada',
+    'Lanceolada',
+    'Obovada',
+    'Ovada',
+    'Palmeada',
+    'Trifoliada',
+    'Elíptica',
+    'Redonda'
+]
 SPECIES = [
-    'cassava_deseased', 'cassava_healthy',
-    'corn_deseased', 'corn_healthy',
-    'cucumber_deseased', 'cucumber_healthy',
-    'eggplant_deseased', 'eggplant_healthy',
-    'yam_deseased', 'yam_healthy'
+    'cassava_deseased',
+    'cassava_healthy',
+    'corn_deseased',
+    'corn_healthy',
+    'cucumber_deseased',
+    'cucumber_healthy',
+    'eggplant_deseased',
+    'eggplant_healthy',
+    'yam_deseased',
+    'yam_healthy',
+    'tomato_deseased',
+    'tomato_healthy'
 ]
