@@ -4,6 +4,7 @@ import tensorflow as tf
 import os
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from ..config import MODEL_DIR, DATA_DIR, BACKUP_DIR, MAX_BACKUPS
+from ..utils.label_detector import detect_new_classes, update_config_with_new_classes, adjust_model_for_new_classes
 
 bp = Blueprint('retrain', __name__)
 
@@ -28,9 +29,32 @@ def init_retrain_route():
             model_path = os.path.join(MODEL_DIR, f"modelo_{model_name}.h5")
             data_path = os.path.join(DATA_DIR, model_name)
 
+            # Detectar nuevas clases en los datos
+            print(f"Detectando clases en los datos para {model_name}...")
+            class_info = detect_new_classes(model_name)
+            
+            if class_info['has_changes']:
+                print(f"Nuevas clases detectadas: {class_info['new_classes']}")
+                if class_info['removed_classes']:
+                    print(f"Clases removidas: {class_info['removed_classes']}")
+                
+                # Actualizar configuración con nuevas clases
+                if class_info['new_classes']:
+                    print(f"Actualizando configuración con nuevas clases...")
+                    update_config_with_new_classes(model_name, class_info['new_classes'])
+                    print("Configuración actualizada exitosamente.")
+            else:
+                print(f"No se detectaron cambios en las clases para {model_name}")
+
             # Cargar y entrenar en GPU si hay, de lo contrario en CPU
             with tf.device('/GPU:0') if tf.config.list_physical_devices('GPU') else tf.device('/CPU:0'):
                 model = tf.keras.models.load_model(model_path)
+                
+                # Ajustar modelo si hay nuevas clases
+                if class_info['has_changes'] and class_info['new_classes']:
+                    print(f"Ajustando modelo para {len(class_info['new_classes'])} nuevas clases...")
+                    model = adjust_model_for_new_classes(model, model_name, class_info['new_classes'])
+                    print("Modelo ajustado exitosamente.")
 
             datagen = ImageDataGenerator(rescale=1./255, validation_split=0.2)
             train_gen = datagen.flow_from_directory(
@@ -98,10 +122,47 @@ def init_retrain_route():
                 except Exception as re:
                     print(f"Error al restaurar backup de {model_name}: {re}")
 
+        # Detectar clases antes de iniciar el entrenamiento para mostrar información inmediata
+        class_info = detect_new_classes(model_name)
+        
         threading.Thread(target=train_thread, args=(model_name,)).start()
 
-        return jsonify({
+        response = {
             "status": "Entrenamiento iniciado",
-            "model": model_name
+            "model": model_name,
+            "classes_detected": class_info['detected_classes'],
+            "current_classes": class_info['current_classes'],
+            "new_classes": class_info['new_classes'],
+            "removed_classes": class_info['removed_classes'],
+            "has_changes": class_info['has_changes']
+        }
+        
+        if class_info['has_changes']:
+            response["message"] = f"Se detectaron {len(class_info['new_classes'])} nuevas clases y {len(class_info['removed_classes'])} clases removidas. El modelo será ajustado automáticamente."
+        else:
+            response["message"] = "No se detectaron cambios en las clases. El modelo será reentrenado con las clases existentes."
+
+        return jsonify(response)
+    
+    @bp.route('/check-classes', methods=['GET'])
+    def check_classes():
+        """Endpoint para verificar las clases disponibles sin iniciar entrenamiento"""
+        model_name = request.args.get('model')
+        if model_name not in ['especies', 'hojas', 'plantas']:
+            return jsonify({
+                "error": "Debes especificar ?model=especies | hojas | plantas"
+            }), 400
+        
+        class_info = detect_new_classes(model_name)
+        
+        return jsonify({
+            "model": model_name,
+            "classes_detected": class_info['detected_classes'],
+            "current_classes": class_info['current_classes'],
+            "new_classes": class_info['new_classes'],
+            "removed_classes": class_info['removed_classes'],
+            "has_changes": class_info['has_changes'],
+            "message": f"Clases detectadas: {len(class_info['detected_classes'])}, Clases actuales: {len(class_info['current_classes'])}"
         })
+    
     return bp

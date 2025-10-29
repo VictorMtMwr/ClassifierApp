@@ -13,7 +13,7 @@ PORT = 5000
 DEBUG = True
 
 PLANTS = [False, True]
-SHAPES = ['Eliptica', 'Imparipinnada', 'Lanceolada', 'Obovada', 'Ovada', 'Palmeada', 'Trifoliada']
+SHAPES = ['Eliptica', 'Imparipinnada', 'Lanceolada', 'Obovada', 'Ovada', 'Palmeada', 'Trifoliada', 'nueva_forma']
 SPECIES = [
     'cassava_deseased', 'cassava_healthy',
     'corn_deseased', 'corn_healthy',
