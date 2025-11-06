@@ -1,4 +1,8 @@
-flask
+fastapi
+uvicorn[standard]
 tensorflow
 pillow
 numpy
+python-multipart
+boto3
+python-dotenv

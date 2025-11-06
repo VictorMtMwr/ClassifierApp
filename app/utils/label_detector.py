@@ -197,13 +197,20 @@ def adjust_model_for_new_classes(model, model_type, new_classes):
     Returns:
         model: Modelo ajustado
     """
+    import tensorflow as tf
+    
     if not new_classes:
         return model
     
-    # Obtener el número actual de clases
-    current_classes = get_current_classes(model_type)
-    old_num_classes = len(current_classes)
+    # Obtener el número actual de clases del modelo (no de la configuración)
+    # Manejar casos donde output puede ser una lista o un tensor
+    if isinstance(model.output, list):
+        old_num_classes = model.output[0].shape[-1]
+    else:
+        old_num_classes = model.output.shape[-1]
     new_num_classes = old_num_classes + len(new_classes)
+    
+    print(f"Ajustando modelo: {old_num_classes} -> {new_num_classes} clases")
     
     # Obtener la última capa del modelo
     last_layer = model.layers[-1]
@@ -231,8 +238,10 @@ def adjust_model_for_new_classes(model, model_type, new_classes):
     old_weights = last_layer.get_weights()
     if old_weights:
         new_weights = new_model.layers[-1].get_weights()
-        new_weights[0][:old_num_classes] = old_weights[0]
+        # Copiar pesos de las clases originales
+        new_weights[0][:, :old_num_classes] = old_weights[0]
         new_weights[1][:old_num_classes] = old_weights[1]
+        # Las nuevas clases tendrán pesos inicializados aleatoriamente
         new_model.layers[-1].set_weights(new_weights)
     
     return new_model
