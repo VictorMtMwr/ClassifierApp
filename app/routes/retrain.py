@@ -202,31 +202,38 @@ def init_retrain_route():
                     classes_to_add = num_detected_classes - current_model_classes
                     
                     if classes_to_add > 0:
-                        # Primero intentar usar las nuevas clases detectadas desde class_info
-                        new_classes_needed = class_info.get('new_classes', [])
+                        # Obtener las clases nuevas detectadas
+                        new_classes_from_config = class_info.get('new_classes', [])
                         
-                        # Si no hay nuevas clases en class_info pero sí hay diferencia en el número,
-                        # significa que las clases ya están en la configuración pero el modelo no las tiene
-                        # Esto pasa cuando el modelo fue entrenado antes de agregar nuevas clases a la config
-                        if not new_classes_needed:
-                            # Las clases detectadas están ordenadas alfabéticamente
-                            # Asumimos que las primeras current_model_classes son las que el modelo tiene
-                            # y las restantes son las nuevas que necesitamos agregar
-                            if len(detected_classes) > current_model_classes:
-                                # Tomar las clases que están después de las primeras current_model_classes
-                                new_classes_needed = detected_classes[current_model_classes:]
-                            else:
-                                # Fallback: comparar con current_classes de la configuración
-                                current_config_classes = class_info['current_classes']
-                                new_classes_needed = [cls for cls in detected_classes if cls not in current_config_classes]
-                            
-                            # Si aún está vacío, tomar las últimas classes_to_add clases como último recurso
-                            if not new_classes_needed:
-                                new_classes_needed = detected_classes[-classes_to_add:]
+                        # Crear un generador temporal para obtener el orden exacto de clases
+                        datagen = ImageDataGenerator(rescale=1./255)
+                        temp_gen = datagen.flow_from_directory(
+                            os.path.join(data_path, "train"),
+                            target_size=(128, 128),
+                            batch_size=1,
+                            class_mode='categorical',
+                            shuffle=False
+                        )
+                        # Obtener todas las clases en el orden que el generador las tiene
+                        all_classes_sorted = sorted(temp_gen.class_indices.keys(), key=lambda x: temp_gen.class_indices[x])
+                        
+                        # Las clases que el modelo tiene actualmente son las primeras current_model_classes
+                        model_current_classes = all_classes_sorted[:current_model_classes]
+                        
+                        # Las clases que faltan son las que están en all_classes_sorted pero no en model_current_classes
+                        new_classes_needed = [cls for cls in all_classes_sorted if cls not in model_current_classes]
+                        
+                        # Asegurarse de que tenemos exactamente classes_to_add clases
+                        if len(new_classes_needed) != classes_to_add:
+                            # Si hay discrepancia, tomar las últimas classes_to_add clases
+                            new_classes_needed = all_classes_sorted[-classes_to_add:]
                         
                         print(f"Agregando {len(new_classes_needed)} clases al modelo: {new_classes_needed}")
                         model = adjust_model_for_new_classes(model, model_name, new_classes_needed)
                         print("Modelo ajustado exitosamente.")
+                        
+                        # Limpiar el generador temporal
+                        del temp_gen
                     else:
                         # El modelo tiene más clases que las detectadas - esto es problemático
                         # Por ahora, creamos un nuevo modelo con el número correcto de clases
