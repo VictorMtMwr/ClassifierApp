@@ -10,7 +10,7 @@ from ..config import (
     CLOUDFLARE_R2_ACCESS_KEY_ID, CLOUDFLARE_R2_SECRET_ACCESS_KEY,
     CLOUDFLARE_R2_PREFIX
 )
-from ..utils.label_detector import detect_new_classes, update_config_with_new_classes, adjust_model_for_new_classes, reload_config
+from ..utils.label_detector import detect_new_classes, update_config_with_new_classes, update_config_with_detected_classes, adjust_model_for_new_classes, reload_config
 from ..utils.cloudflare_downloader import download_verified_images_from_r2
 
 def get_gpu_info():
@@ -144,22 +144,22 @@ def init_retrain_route():
             
             print(f"Clases detectadas en los datos: {num_detected_classes} ({detected_classes})")
             
+            # SIEMPRE actualizar la configuración con todas las clases detectadas en orden alfabético
+            # Esto asegura que el orden en config.py coincida con el orden que usa ImageDataGenerator
+            print(f"Actualizando configuración con todas las clases detectadas en orden alfabético...")
+            if update_config_with_detected_classes(model_name, detected_classes):
+                # Recargar la configuración para aplicar los cambios
+                reload_config()
+                print("✅ Configuración actualizada y recargada exitosamente.")
+            else:
+                print("⚠️  Error al actualizar la configuración.")
+            
             if class_info['has_changes']:
                 print(f"Nuevas clases detectadas: {class_info['new_classes']}")
                 if class_info['removed_classes']:
                     print(f"Clases removidas: {class_info['removed_classes']}")
-                
-                # Actualizar configuración con nuevas clases
-                if class_info['new_classes']:
-                    print(f"Actualizando configuración con nuevas clases...")
-                    if update_config_with_new_classes(model_name, class_info['new_classes']):
-                        # Recargar la configuración para aplicar los cambios
-                        reload_config()
-                        print("Configuración actualizada y recargada exitosamente.")
-                    else:
-                        print("Error al actualizar la configuración.")
             else:
-                print(f"No se detectaron cambios en las clases para {model_name}")
+                print(f"No se detectaron cambios en las clases para {model_name} (solo actualización de orden)")
 
             # Detectar dispositivo automáticamente (GPU o CPU)
             gpus = tf.config.list_physical_devices('GPU')

@@ -61,7 +61,7 @@ SPECIES = [
     'solanum-melongena_deseased',
     'solanum-melongena_healthy',
     'zea-mays_deseased',
-    'zea-mays_healthy',
+    'zea-mays_healthy'
 ]
 
 # Configuración de Cloudflare R2 para descarga de imágenes

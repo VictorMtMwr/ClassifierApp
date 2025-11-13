@@ -77,9 +77,95 @@ def detect_new_classes(model_type):
     }
 
 
+def update_config_with_detected_classes(model_type, detected_classes):
+    """
+    Actualiza la configuración con todas las clases detectadas en orden alfabético.
+    Esto asegura que el orden en config.py coincida con el orden que usa ImageDataGenerator.
+    
+    Args:
+        model_type (str): Tipo de modelo ('especies', 'hojas', 'plantas')
+        detected_classes (list): Lista de todas las clases detectadas (ya ordenadas alfabéticamente)
+    
+    Returns:
+        bool: True si la actualización fue exitosa, False en caso contrario
+    """
+    if not detected_classes:
+        return False
+    
+    config_path = os.path.join(os.path.dirname(__file__), '..', 'config.py')
+    
+    # Leer el archivo de configuración actual
+    with open(config_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    
+    # Usar las clases detectadas directamente (ya están en orden alfabético)
+    updated_classes = sorted(detected_classes)  # Asegurar orden alfabético
+    
+    # Determinar el nombre de la variable según el tipo de modelo
+    if model_type == 'especies':
+        var_name = 'SPECIES'
+        # Formatear como lista de strings con saltos de línea para legibilidad
+        formatted_classes = []
+        for cls in updated_classes:
+            formatted_classes.append(f"    '{cls}'")
+        new_content = "[\n" + ",\n".join(formatted_classes) + "\n]"
+        
+    elif model_type == 'hojas':
+        var_name = 'SHAPES'
+        # Formatear como lista de strings con saltos de línea para legibilidad
+        formatted_classes = []
+        for cls in updated_classes:
+            formatted_classes.append(f"    '{cls}'")
+        new_content = "[\n" + ",\n".join(formatted_classes) + "\n]"
+        
+    elif model_type == 'plantas':
+        var_name = 'PLANTS'
+        # Convertir strings de vuelta a booleanos
+        bool_classes = []
+        for cls in updated_classes:
+            if isinstance(cls, bool):
+                bool_classes.append(cls)
+            elif cls.lower() in ['true', '1', 'yes']:
+                bool_classes.append(True)
+            elif cls.lower() in ['false', '0', 'no']:
+                bool_classes.append(False)
+            else:
+                # Si no es un booleano, mantener como string
+                bool_classes.append(cls)
+        new_content = str(bool_classes)
+    else:
+        return False
+    
+    # Reemplazar la línea correspondiente en el archivo de configuración
+    import re
+    
+    # Patrón más específico para capturar la variable completa
+    if model_type in ['especies', 'hojas']:
+        pattern = rf"^{var_name}\s*=\s*\[.*?\]"
+        replacement = f"{var_name} = {new_content}"
+    else:  # plantas
+        pattern = rf"^{var_name}\s*=\s*\[.*?\]"
+        replacement = f"{var_name} = {new_content}"
+    
+    new_file_content = re.sub(pattern, replacement, content, flags=re.MULTILINE | re.DOTALL)
+    
+    # Verificar que el reemplazo fue exitoso
+    if new_file_content == content:
+        print(f"Advertencia: No se pudo actualizar {var_name} en config.py")
+        return False
+    
+    # Escribir el archivo actualizado
+    with open(config_path, 'w', encoding='utf-8') as f:
+        f.write(new_file_content)
+    
+    print(f"Configuración actualizada: {var_name} ahora tiene {len(updated_classes)} clases en orden alfabético")
+    return True
+
+
 def update_config_with_new_classes(model_type, new_classes):
     """
     Actualiza la configuración con las nuevas clases detectadas.
+    DEPRECATED: Usar update_config_with_detected_classes en su lugar.
     
     Args:
         model_type (str): Tipo de modelo ('especies', 'hojas', 'plantas')
@@ -102,6 +188,9 @@ def update_config_with_new_classes(model_type, new_classes):
     for new_class in new_classes:
         if new_class not in updated_classes:
             updated_classes.append(new_class)
+    
+    # Ordenar alfabéticamente para mantener consistencia
+    updated_classes = sorted(updated_classes)
     
     # Determinar el nombre de la variable según el tipo de modelo
     if model_type == 'especies':
