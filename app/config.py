@@ -62,9 +62,6 @@ SPECIES = [
     'solanum-melongena_healthy',
     'discorea-alata-l_deseased',
     'discorea-alata-l_healthy',
-    'solanum-lycopersicum_healthy',
-    'solanum-lycopersicum_deseased',
-    'cannabis-sativa_healthy'
 ]
 
 # Configuración de Cloudflare R2 para descarga de imágenes
