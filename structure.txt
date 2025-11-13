@@ -1,22 +1,38 @@
 ClassifierApp/
 │
 ├── app/
-│   ├── __init__.py          # Inicializa Flask, configura app y modelos
-│   ├── config.py            # Configuración general (paths, límites, etc.)
-│   ├── models_loader.py     # Carga y gestión de los modelos TensorFlow
-│   ├── preprocess.py        # Funciones de preprocesamiento de imágenes
+│   ├── __init__.py              # Inicializa FastAPI, configura app y modelos
+│   ├── config.py                # Configuración general (paths, límites, etc.)
+│   ├── models_loader.py         # Carga y gestión de los modelos TensorFlow
+│   ├── preprocess.py            # Funciones de preprocesamiento de imágenes
+│   ├── schemas.py               # Esquemas Pydantic para validación
 │   ├── routes/
 │   │   ├── __init__.py
-│   │   ├── predict.py       # Endpoint /predict
-│   │   └── retrain.py       # Endpoint /retrain
+│   │   ├── predict.py           # Endpoint /predict
+│   │   └── retrain.py            # Endpoint /retrain y gestión de versiones
 │   └── utils/
-│       ├── locks.py         # Manejadores de threading y seguridad
-│       └── helpers.py       # Funciones utilitarias (guardar logs, etc.)
+│       ├── locks.py             # Manejadores de threading y seguridad
+│       ├── label_detector.py    # Detección automática de nuevas clases
+│       ├── cloudflare_downloader.py  # Descarga de imágenes desde R2
+│       └── model_versioning.py  # Sistema de versionado de modelos
 │
-├── data/                    # Dataset
-├── models/                  # Modelos .h5
-├── backups/                 # Respaldo de los modelos .h5 por si falla el entrenamiento o la carga.
-├── logs/                    # Logs de predicción y entrenamiento
-├── main.py                  # Punto de entrada (run server)
-└── requirements.txt
+├── data/                        # Dataset de entrenamiento
+│   ├── especies/train/          # Imágenes por especie y estado
+│   ├── hojas/train/             # Imágenes por forma de hoja
+│   └── plantas/train/           # Imágenes por tipo de planta
+│
+├── models/                      # Modelos actuales (.h5)
+│   ├── modelo_especies.h5
+│   ├── modelo_hojas.h5
+│   └── modelo_plantas.h5
+│
+├── backups/                     # Versiones de modelos con versionado
+│   ├── modelo_especies_v0001_20240101T120000.h5
+│   ├── modelo_especies_v0002_20240102T150000.h5
+│   ├── especies_versions.json   # Metadatos de versiones
+│   └── ...
+│
+├── logs/                        # Logs de predicción y entrenamiento
+├── main.py                      # Punto de entrada (run server)
+└── requirements.txt             # Dependencias Python
 

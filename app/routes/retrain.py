@@ -12,6 +12,8 @@ from ..config import (
 )
 from ..utils.label_detector import detect_new_classes, update_config_with_new_classes, update_config_with_detected_classes, adjust_model_for_new_classes, reload_config
 from ..utils.cloudflare_downloader import download_verified_images_from_r2
+from ..utils.model_versioning import create_model_version, list_model_versions, restore_model_version, get_version_info
+from ..models_loader import reload_model
 
 def get_gpu_info():
     """Obtiene información sobre las GPUs disponibles y su configuración"""
@@ -51,7 +53,34 @@ def get_gpu_info():
 def init_retrain_route():
     bp = APIRouter(prefix="/retrain", tags=["retrain"])
 
-    @bp.post("")
+    @bp.post(
+        "",
+        summary="Reentrenar modelo",
+        description="""
+        Inicia el reentrenamiento de un modelo específico. El entrenamiento se ejecuta en un hilo separado
+        para no bloquear la API.
+        
+        **Proceso automático:**
+        1. Se crea automáticamente una versión del modelo actual antes de sobrescribir
+        2. Se detectan nuevas clases en los datos de entrenamiento
+        3. Se ajusta el modelo si hay cambios en las clases
+        4. Se entrena el modelo (usa GPU si está disponible)
+        5. Se guarda el nuevo modelo
+        6. Se recarga automáticamente y queda disponible para predicciones
+        
+        **Sistema de versionado:**
+        - Cada reentrenamiento crea una nueva versión numerada del modelo anterior
+        - Las versiones se guardan en `backups/` con nombres como `modelo_especies_v0001_20240101T120000.h5`
+        - Se mantienen automáticamente las 3 versiones más recientes
+        - Puedes restaurar versiones anteriores usando `/retrain/restore-version`
+        
+        **Notas:**
+        - El entrenamiento puede tardar varios minutos dependiendo del tamaño del dataset
+        - El modelo reentrenado queda disponible inmediatamente sin reiniciar la aplicación
+        - Si hay error, el modelo anterior ya está guardado en versiones y puede restaurarse
+        """,
+        response_description="Estado del entrenamiento iniciado"
+    )
     def retrain_model(model: str = Query(..., description="Modelo a reentrenar: especies, hojas o plantas")):
         if model not in ['especies', 'hojas', 'plantas']:
             raise HTTPException(
@@ -535,51 +564,42 @@ def init_retrain_route():
                         # Re-lanzar el error si no es de memoria
                         raise
 
-            # Preparar respaldo antes de sobrescribir
-            os.makedirs(BACKUP_DIR, exist_ok=True)
-            from datetime import datetime
-            timestamp = datetime.utcnow().strftime('%Y%m%dT%H%M%S')
-            backup_filename = f"modelo_{model_name}.{timestamp}.h5.bak"
-            backup_path = os.path.join(BACKUP_DIR, backup_filename)
-
             try:
-                # Copia de seguridad del modelo actual
+                # Crear versión del modelo actual ANTES de guardar el nuevo
+                # Esto preserva el modelo anterior en backups
                 if os.path.exists(model_path):
-                    import shutil
-                    shutil.copy2(model_path, backup_path)
-
+                    try:
+                        from datetime import datetime
+                        version_info = create_model_version(
+                            model_name, 
+                            version_notes=f"Reentrenamiento automático - {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}"
+                        )
+                        print(f"✅ Versión {version_info['version']} del modelo anterior creada: {version_info['filename']}")
+                    except Exception as version_error:
+                        print(f"⚠️  Error creando versión del modelo anterior: {version_error}")
+                        print(f"   Continuando con el guardado del nuevo modelo...")
+                
                 # Guardar nuevo modelo
                 model.save(model_path)
 
                 # Validar que el modelo guardado se puede cargar
                 _ = tf.keras.models.load_model(model_path)
                 print(f"Modelo {model_name} actualizado y validado.")
-                # Rotar backups: mantener solo los MAX_BACKUPS más recientes por modelo
+                
+                # Recargar el modelo en el sistema global para que esté disponible para predicciones
+                print(f"Recargando modelo {model_name} en el sistema de predicción...")
                 try:
-                    import glob
-                    import re
-                    pattern = os.path.join(BACKUP_DIR, f"modelo_{model_name}.*.h5.bak")
-                    files = glob.glob(pattern)
-                    # Ordenar por mtime descendente
-                    files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
-                    for old in files[MAX_BACKUPS:]:
-                        try:
-                            os.remove(old)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
+                    reload_model(model_name)
+                    print(f"✅ Modelo {model_name} recargado y disponible para predicciones.")
+                except Exception as reload_error:
+                    print(f"⚠️  Error al recargar modelo {model_name} para predicciones: {reload_error}")
+                    print(f"   El modelo fue guardado correctamente, pero será necesario reiniciar la aplicación para usarlo.")
 
             except Exception as e:
                 print(f"Error al actualizar modelo {model_name}: {e}")
-                # Restaurar desde backup si existe
-                try:
-                    if os.path.exists(backup_path):
-                        import shutil
-                        shutil.copy2(backup_path, model_path)
-                        print(f"Restaurado modelo {model_name} desde backup.")
-                except Exception as re:
-                    print(f"Error al restaurar backup de {model_name}: {re}")
+                # Nota: Si hay error, el modelo anterior ya está guardado en versiones
+                # Se puede restaurar usando el endpoint de restauración de versiones
+                print(f"💡 Puedes restaurar una versión anterior usando el endpoint /retrain/restore-version")
 
         # Detectar clases antes de iniciar el entrenamiento para mostrar información inmediata
         class_info = detect_new_classes(model)
@@ -603,9 +623,15 @@ def init_retrain_route():
 
         return response
     
-    @bp.get("/check-classes")
+    @bp.get(
+        "/check-classes",
+        summary="Verificar clases disponibles",
+        description="""
+        Verifica las clases disponibles en los datos de entrenamiento sin iniciar el entrenamiento.
+        Útil para ver qué clases se detectarían antes de reentrenar.
+        """
+    )
     def check_classes(model: str = Query(..., description="Modelo a verificar: especies, hojas o plantas")):
-        """Endpoint para verificar las clases disponibles sin iniciar entrenamiento"""
         if model not in ['especies', 'hojas', 'plantas']:
             raise HTTPException(
                 status_code=400,
@@ -624,9 +650,15 @@ def init_retrain_route():
             "message": f"Clases detectadas: {len(class_info['detected_classes'])}, Clases actuales: {len(class_info['current_classes'])}"
         }
     
-    @bp.post("/update-config")
+    @bp.post(
+        "/update-config",
+        summary="Actualizar configuración",
+        description="""
+        Actualiza la configuración de la aplicación con nuevas clases detectadas en los datos.
+        Esto actualiza las listas de clases en `config.py` sin necesidad de reentrenar.
+        """
+    )
     def update_config(model: str = Query(..., description="Modelo a actualizar: especies, hojas o plantas")):
-        """Endpoint para actualizar la configuración con nuevas clases detectadas"""
         if model not in ['especies', 'hojas', 'plantas']:
             raise HTTPException(
                 status_code=400,
@@ -655,9 +687,15 @@ def init_retrain_route():
                 "message": "No hay nuevas clases para actualizar"
             }
     
-    @bp.get("/gpu-status")
+    @bp.get(
+        "/gpu-status",
+        summary="Estado de GPU",
+        description="""
+        Obtiene información detallada sobre el estado y uso de las GPUs disponibles.
+        Incluye información de TensorFlow y nvidia-smi (si está disponible).
+        """
+    )
     def gpu_status():
-        """Endpoint para verificar el estado y uso de las GPUs"""
         try:
             import subprocess
             import json
@@ -699,5 +737,135 @@ def init_retrain_route():
             }
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error obteniendo información de GPU: {str(e)}")
+    
+    @bp.get(
+        "/versions",
+        summary="Listar versiones de modelo",
+        description="""
+        Lista todas las versiones disponibles de un modelo guardadas en backups.
+        
+        **Información de cada versión:**
+        - Número de versión (secuencial)
+        - Timestamp de creación
+        - Nombre del archivo
+        - Notas/descripción
+        - Tamaño del archivo
+        
+        **Notas:**
+        - Se mantienen automáticamente las 3 versiones más recientes (configurable)
+        - Las versiones se ordenan de más reciente a más antigua
+        - Solo se muestran versiones cuyos archivos aún existen
+        """,
+        response_description="Lista de versiones disponibles del modelo"
+    )
+    def list_versions(model: str = Query(..., description="Modelo a consultar: especies, hojas o plantas")):
+        if model not in ['especies', 'hojas', 'plantas']:
+            raise HTTPException(
+                status_code=400,
+                detail="Debes especificar ?model=especies | hojas | plantas"
+            )
+        
+        try:
+            versions = list_model_versions(model)
+            return {
+                "model": model,
+                "total_versions": len(versions),
+                "versions": versions,
+                "message": f"Se encontraron {len(versions)} versiones del modelo {model}"
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error listando versiones: {str(e)}")
+    
+    @bp.get(
+        "/version-info",
+        summary="Información de versión específica",
+        description="""
+        Obtiene información detallada de una versión específica de un modelo.
+        
+        **Información incluida:**
+        - Número de versión
+        - Timestamp de creación
+        - Ruta del archivo
+        - Notas/descripción
+        - Tamaño del archivo en bytes
+        """
+    )
+    def get_version(model: str = Query(..., description="Modelo a consultar: especies, hojas o plantas"),
+                    version: int = Query(..., description="Número de versión a consultar")):
+        if model not in ['especies', 'hojas', 'plantas']:
+            raise HTTPException(
+                status_code=400,
+                detail="Debes especificar ?model=especies | hojas | plantas"
+            )
+        
+        try:
+            version_info = get_version_info(model, version)
+            if version_info is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No se encontró la versión {version} del modelo {model}"
+                )
+            return {
+                "model": model,
+                "version": version,
+                "version_info": version_info
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error obteniendo información de versión: {str(e)}")
+    
+    @bp.post(
+        "/restore-version",
+        summary="Restaurar versión de modelo",
+        description="""
+        Restaura una versión específica de un modelo, reemplazando el modelo actual.
+        
+        **Proceso de restauración:**
+        1. Se crea un backup del modelo actual antes de restaurar
+        2. Se copia la versión seleccionada al directorio de modelos activos
+        3. Se valida que el modelo restaurado se puede cargar correctamente
+        4. Se recarga automáticamente en el sistema de predicción
+        5. El modelo restaurado queda disponible inmediatamente para predicciones
+        
+        **Notas:**
+        - El modelo actual se reemplaza por la versión seleccionada
+        - Si hay error durante la validación, se restaura automáticamente el modelo original
+        - El modelo restaurado se recarga sin necesidad de reiniciar la aplicación
+        - Útil para revertir a una versión anterior si el nuevo modelo no funciona bien
+        """,
+        response_description="Resultado de la restauración con información de la versión"
+    )
+    def restore_version(model: str = Query(..., description="Modelo a restaurar: especies, hojas o plantas"),
+                       version: int = Query(..., description="Número de versión a restaurar")):
+        if model not in ['especies', 'hojas', 'plantas']:
+            raise HTTPException(
+                status_code=400,
+                detail="Debes especificar ?model=especies | hojas | plantas"
+            )
+        
+        try:
+            restore_result = restore_model_version(model, version)
+            
+            # Recargar el modelo restaurado en el sistema global
+            print(f"Recargando modelo {model} restaurado en el sistema de predicción...")
+            try:
+                reload_model(model)
+                print(f"✅ Modelo {model} restaurado y recargado correctamente.")
+                restore_result['reloaded'] = True
+            except Exception as reload_error:
+                print(f"⚠️  Error al recargar modelo {model} restaurado: {reload_error}")
+                restore_result['reloaded'] = False
+                restore_result['reload_error'] = str(reload_error)
+            
+            return {
+                "status": "success",
+                "message": f"Modelo {model} restaurado a la versión {version}",
+                **restore_result
+            }
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error restaurando versión: {str(e)}")
     
     return bp

@@ -6,12 +6,33 @@ import os
 from ..preprocess import preprocess_image
 from ..utils.locks import predict_lock, safe_predict
 from ..config import SPECIES, SHAPES, PLANTS
+from ..models_loader import get_models
 
 def init_routes(especies, formas, plantas):
     bp = APIRouter(prefix="/predict", tags=["predict"])
 
-    @bp.post("")
-    async def predict(image: UploadFile = File(...)):
+    @bp.post(
+        "",
+        summary="Clasificar imagen",
+        description="""
+        Clasifica una imagen usando tres modelos de aprendizaje profundo:
+        - **Modelo 1 (Especies)**: Clasifica la especie de la planta y su estado (deseased/healthy)
+        - **Modelo 2 (Formas)**: Clasifica la forma de la hoja
+        - **Modelo 3 (Plantas)**: Clasifica si es una planta o no
+        
+        Los modelos se cargan dinámicamente, por lo que siempre usan las versiones más recientes
+        (incluso después de reentrenar sin reiniciar la aplicación).
+        
+        **Notas:**
+        - Las predicciones se ejecutan en CPU para no interferir con el entrenamiento en GPU
+        - Múltiples predicciones pueden ejecutarse simultáneamente
+        - Las imágenes se redimensionan automáticamente a 128x128 píxeles
+        """,
+        response_description="Predicciones de los tres modelos con probabilidades"
+    )
+    async def predict(image: UploadFile = File(..., description="Archivo de imagen a clasificar (JPG, PNG, etc.)")):
+        # Obtener los modelos actuales (pueden haber sido recargados)
+        especies, formas, plantas = get_models()
         if not image.content_type or not image.content_type.startswith('image/'):
             raise HTTPException(status_code=400, detail='El archivo debe ser una imagen')
         
@@ -66,19 +87,16 @@ def init_routes(especies, formas, plantas):
                 'class': idx1,
                 'class_name': SPECIES[idx1],
                 'probability': float(np.max(pred1)),
-                'all_probabilities': {SPECIES[i]: float(pred1[i]) for i in range(len(SPECIES))} if len(pred1) == len(SPECIES) else {}
             },
             'model2': {
                 'class': idx2,
                 'class_name': SHAPES[idx2],
                 'probability': float(np.max(pred2)),
-                'all_probabilities': {SHAPES[i]: float(pred2[i]) for i in range(len(SHAPES))} if len(pred2) == len(SHAPES) else {}
             },
             'model3': {
                 'class': idx3,
                 'class_name': str(PLANTS[idx3]),
                 'probability': float(np.max(pred3)),
-                'all_probabilities': {str(PLANTS[i]): float(pred3[i]) for i in range(len(PLANTS))} if len(pred3) == len(PLANTS) else {}
             }
         }
         return result
