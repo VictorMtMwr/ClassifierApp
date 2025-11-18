@@ -331,16 +331,19 @@ def init_retrain_route():
                     # Detectar recursos disponibles y ajustar batch size automáticamente
                     if use_gpu:
                         # Obtener información de VRAM disponible
+                        available_memory_gb = None
+                        total_memory = None
+                        
                         try:
                             gpu_devices = tf.config.list_physical_devices('GPU')
                             if gpu_devices:
-                                # Intentar obtener información de memoria de GPU
+                                # Intentar obtener información de memoria de GPU usando TensorFlow
                                 try:
                                     memory_info = tf.config.experimental.get_memory_info('GPU:0')
                                     total_memory = memory_info['limit'] / (1024**3)  # Convertir a GB
                                     # Estimar memoria disponible (restar ~500MB para sistema y otros procesos)
                                     available_memory_gb = total_memory - 0.5
-                                    print(f"   💾 VRAM total detectada: {total_memory:.2f} GB")
+                                    print(f"   💾 VRAM total detectada (TensorFlow): {total_memory:.2f} GB")
                                     print(f"   💾 VRAM disponible estimada: {available_memory_gb:.2f} GB")
                                 except:
                                     # Fallback: usar detalles de dispositivo
@@ -349,55 +352,75 @@ def init_retrain_route():
                                         if 'device_memory_size' in details:
                                             total_memory = details['device_memory_size'] / (1024**3)
                                             available_memory_gb = total_memory - 0.5
-                                            print(f"   💾 VRAM total detectada: {total_memory:.2f} GB")
+                                            print(f"   💾 VRAM total detectada (TensorFlow details): {total_memory:.2f} GB")
                                             print(f"   💾 VRAM disponible estimada: {available_memory_gb:.2f} GB")
-                                        else:
-                                            # Si no podemos obtener info, usar valores conservadores
-                                            available_memory_gb = 1.5  # Asumir ~1.5GB disponible
-                                            print(f"   ⚠️  No se pudo detectar VRAM exacta, usando estimación conservadora: {available_memory_gb:.2f} GB")
                                     except:
-                                        available_memory_gb = 1.5
-                                        print(f"   ⚠️  No se pudo detectar VRAM, usando estimación conservadora: {available_memory_gb:.2f} GB")
-                            
-                                # Calcular batch_size óptimo según VRAM disponible
-                                # Estimación: cada imagen 128x128x3 usa ~0.2MB en memoria (con gradientes y overhead)
-                                # Con modelo cargado, reservamos ~2GB, así que usamos el resto para batches
-                                # batch_size * 0.2MB * 4 (overhead) = memoria por batch
-                                # Queremos usar ~60% de la memoria disponible para batches
-                                memory_for_batches_gb = available_memory_gb * 0.6
-                                memory_for_batches_mb = memory_for_batches_gb * 1024
+                                        pass
                                 
-                                # Cada batch usa aproximadamente: batch_size * 0.2MB * 4 = batch_size * 0.8MB
-                                # batch_size = memory_for_batches_mb / 0.8
-                                estimated_batch_size = int(memory_for_batches_mb / 0.8)
+                                # Si TensorFlow no pudo obtener la info, intentar con nvidia-smi
+                                if available_memory_gb is None:
+                                    try:
+                                        import subprocess
+                                        result = subprocess.run(
+                                            ['nvidia-smi', '--query-gpu=memory.total', '--format=csv,noheader,nounits'],
+                                            capture_output=True,
+                                            text=True,
+                                            timeout=3
+                                        )
+                                        if result.returncode == 0:
+                                            memory_total_mb = float(result.stdout.strip().split('\n')[0])
+                                            total_memory = memory_total_mb / 1024  # Convertir MB a GB
+                                            available_memory_gb = total_memory - 0.5
+                                            print(f"   💾 VRAM total detectada (nvidia-smi): {total_memory:.2f} GB")
+                                            print(f"   💾 VRAM disponible estimada: {available_memory_gb:.2f} GB")
+                                    except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+                                        pass
                                 
-                                # Ajustar según rangos de VRAM conocidos
-                                if available_memory_gb >= 8:
-                                    # GPU con 8GB+ (RTX 3070, 3080, etc.)
-                                    batch_size = min(estimated_batch_size, 256)
-                                elif available_memory_gb >= 4:
-                                    # GPU con 4-8GB (GTX 1650 Ti, RTX 2060, etc.)
-                                    batch_size = min(estimated_batch_size, 128)
-                                elif available_memory_gb >= 2:
-                                    # GPU con 2-4GB
-                                    batch_size = min(estimated_batch_size, 64)
-                                else:
-                                    # GPU con menos de 2GB disponible
-                                    batch_size = min(estimated_batch_size, 32)
-                                
-                                # Asegurar batch_size mínimo
-                                if batch_size < 8:
-                                    batch_size = 8
-                                
-                                print(f"   📦 Batch size calculado automáticamente: {batch_size} (basado en {available_memory_gb:.2f} GB VRAM disponible)")
-                                print(f"   ⚠️  Si hay OOM, se reducirá automáticamente")
+                                # Si aún no tenemos info, usar valores conservadores
+                                if available_memory_gb is None:
+                                    available_memory_gb = 1.5  # Asumir ~1.5GB disponible
+                                    print(f"   ⚠️  No se pudo detectar VRAM exacta, usando estimación conservadora: {available_memory_gb:.2f} GB")
+                                    print(f"   💡 Puedes verificar manualmente con: nvidia-smi")
                             else:
-                                batch_size = 64
-                                print(f"   📦 Batch size por defecto: {batch_size} (no se detectó GPU)")
+                                available_memory_gb = 1.5
+                                print(f"   ⚠️  No se detectaron GPUs, usando estimación conservadora: {available_memory_gb:.2f} GB")
                         except Exception as e:
+                            available_memory_gb = 1.5
                             print(f"   ⚠️  Error detectando VRAM: {e}")
-                            batch_size = 64  # Fallback conservador
-                            print(f"   📦 Usando batch size conservador: {batch_size}")
+                            print(f"   📦 Usando estimación conservadora: {available_memory_gb:.2f} GB")
+                        
+                        # Calcular batch_size óptimo según VRAM disponible
+                        # Estimación: cada imagen 128x128x3 usa ~0.2MB en memoria (con gradientes y overhead)
+                        # Con modelo cargado, reservamos ~2GB, así que usamos el resto para batches
+                        # batch_size * 0.2MB * 4 (overhead) = memoria por batch
+                        # Queremos usar ~60% de la memoria disponible para batches
+                        memory_for_batches_gb = available_memory_gb * 0.6
+                        memory_for_batches_mb = memory_for_batches_gb * 1024
+                        
+                        # Cada batch usa aproximadamente: batch_size * 0.2MB * 4 = batch_size * 0.8MB
+                        # batch_size = memory_for_batches_mb / 0.8
+                        estimated_batch_size = int(memory_for_batches_mb / 0.8)
+                        
+                        # Ajustar según rangos de VRAM conocidos
+                        if available_memory_gb >= 8:
+                            # GPU con 8GB+ (RTX 3070, 3080, etc.)
+                            batch_size = min(estimated_batch_size, 256)
+                        elif available_memory_gb >= 4:
+                            # GPU con 4-8GB (GTX 1650 Ti, RTX 2060, etc.)
+                            batch_size = min(estimated_batch_size, 128)
+                        elif available_memory_gb >= 2:
+                            # GPU con 2-4GB
+                            batch_size = min(estimated_batch_size, 64)
+                        else:
+                            # GPU con menos de 2GB disponible
+                            batch_size = min(estimated_batch_size, 32)
+                        
+                        # Asegurar batch_size mínimo
+                        if batch_size < 8:
+                            batch_size = 8
+                        
+                        print(f"   📦 Batch size calculado automáticamente: {batch_size} (basado en {available_memory_gb:.2f} GB VRAM disponible)")
+                        print(f"   ⚠️  Si hay OOM, se reducirá automáticamente")
                     else:
                         # CPU: usar batch size más pequeño
                         batch_size = 32

@@ -190,7 +190,8 @@ def create_model_version(model_name: str, version_notes: Optional[str] = None) -
 
 def list_model_versions(model_name: str) -> List[Dict]:
     """
-    Lista todas las versiones disponibles de un modelo
+    Lista todas las versiones disponibles de un modelo.
+    Detecta automáticamente archivos físicos que no estén en el JSON y los agrega.
     
     Args:
         model_name: Nombre del modelo
@@ -201,14 +202,71 @@ def list_model_versions(model_name: str) -> List[Dict]:
     if model_name not in ['especies', 'formas', 'plantas']:
         raise ValueError(f"Nombre de modelo inválido: {model_name}")
     
+    import glob
+    import re
+    
     metadata = load_version_metadata(model_name)
     versions = metadata.get('versions', [])
     
+    # Obtener nombres de archivos ya registrados
+    registered_filenames = {v.get('filename', '') for v in versions}
+    
+    # Buscar archivos físicos de versiones en BACKUP_DIR que no estén registrados
+    model_file_map = get_model_file_map()
+    model_base_name = os.path.splitext(model_file_map[model_name])[0]  # 'modelo_especies', etc.
+    pattern = os.path.join(BACKUP_DIR, f"{model_base_name}_v*_*.h5")
+    physical_files = glob.glob(pattern)
+    
+    # Función para extraer información de versión desde el nombre del archivo
+    def parse_version_from_filename(filename):
+        """Extrae número de versión y timestamp del nombre del archivo"""
+        basename = os.path.basename(filename)
+        # Patrón: modelo_especies_v0001_20251118T150737.h5
+        match = re.match(rf"{model_base_name}_v(\d+)_(\d{{8}}T\d{{6}})\.h5", basename)
+        if match:
+            version_num = int(match.group(1))
+            timestamp_str = match.group(2)
+            # Convertir timestamp_str a datetime
+            try:
+                timestamp = datetime.strptime(timestamp_str, '%Y%m%dT%H%M%S')
+                return {
+                    'version': version_num,
+                    'timestamp_str': timestamp_str,
+                    'filename': basename,
+                    'path': os.path.abspath(filename),
+                    'timestamp': timestamp.isoformat()
+                }
+            except:
+                return None
+        return None
+    
+    # Detectar archivos físicos no registrados y agregarlos
+    new_versions = []
+    for physical_file in physical_files:
+        filename = os.path.basename(physical_file)
+        if filename not in registered_filenames:
+            version_info = parse_version_from_filename(physical_file)
+            if version_info:
+                # Agregar información adicional
+                version_info['size_bytes'] = os.path.getsize(physical_file)
+                version_info['notes'] = f"Versión detectada automáticamente - {version_info['timestamp']}"
+                new_versions.append(version_info)
+    
+    # Agregar nuevas versiones detectadas
+    if new_versions:
+        versions.extend(new_versions)
+        print(f"ℹ️  Detectadas {len(new_versions)} versión(es) no registrada(s) del modelo {model_name}, agregadas automáticamente")
+    
     # Verificar que los archivos aún existen
     valid_versions = []
+    removed_count = 0
     for version in versions:
         # Normalizar la ruta (puede ser relativa o absoluta)
-        version_path = version['path']
+        version_path = version.get('path', '')
+        if not version_path:
+            # Si no hay path, construir desde filename
+            version_path = os.path.join(BACKUP_DIR, version.get('filename', ''))
+        
         if not os.path.isabs(version_path):
             # Si es relativa, intentar construirla desde BACKUP_DIR
             version_path = os.path.join(BACKUP_DIR, os.path.basename(version_path))
@@ -221,14 +279,24 @@ def list_model_versions(model_name: str) -> List[Dict]:
             version['path'] = version_path  # Actualizar con ruta normalizada
             valid_versions.append(version)
         else:
-            print(f"⚠️  Archivo de versión no encontrado: {version_path}")
+            # Archivo no encontrado - será removido silenciosamente
+            removed_count += 1
     
-    # Si hay versiones inválidas, actualizar metadatos
-    if len(valid_versions) != len(versions):
+    # Ordenar por versión descendente (más reciente primero)
+    valid_versions.sort(key=lambda v: v['version'], reverse=True)
+    
+    # Si hubo cambios (versiones agregadas o removidas), actualizar metadatos automáticamente
+    if len(valid_versions) != len(versions) or new_versions:
         metadata['versions'] = valid_versions
         if valid_versions:
             metadata['current_version'] = max(v['version'] for v in valid_versions)
+        else:
+            # Si no hay versiones válidas, limpiar current_version
+            metadata['current_version'] = None
+        metadata['last_updated'] = datetime.utcnow().isoformat()
         save_version_metadata(model_name, metadata)
+        if removed_count > 0:
+            print(f"ℹ️  Limpiadas {removed_count} versión(es) huérfana(s) del modelo {model_name}")
     
     return valid_versions
 
