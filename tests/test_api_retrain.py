@@ -37,6 +37,32 @@ def test_retrain_endpoint_valid_model(client):
         mock_thread.assert_called_once()
 
 
+def test_retrain_endpoint_all_models(client):
+    """Test que el endpoint acepta todos los modelos válidos y crea versiones"""
+    models = ['especies', 'hojas', 'plantas']
+    
+    for model in models:
+        with patch('app.routes.retrain.detect_new_classes') as mock_detect, \
+             patch('app.routes.retrain.threading.Thread') as mock_thread:
+            
+            mock_detect.return_value = {
+                'detected_classes': ['class1', 'class2'],
+                'current_classes': ['class1'],
+                'new_classes': ['class2'],
+                'removed_classes': [],
+                'has_changes': True
+            }
+            
+            response = client.post(f"/retrain?model={model}")
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data['status'] == "Entrenamiento iniciado"
+            assert data['model'] == model
+            # Verificar que se inició el thread
+            mock_thread.assert_called_once()
+
+
 def test_list_versions_endpoint(client, mock_config):
     """Test que el endpoint lista versiones correctamente"""
     with patch('app.routes.retrain.list_model_versions') as mock_list:
@@ -52,6 +78,47 @@ def test_list_versions_endpoint(client, mock_config):
         assert data['model'] == 'especies'
         assert data['total_versions'] == 2
         assert len(data['versions']) == 2
+
+
+def test_list_versions_endpoint_all_models(client, mock_config):
+    """Test que el endpoint lista versiones para todos los modelos"""
+    # Mapeo de nombres de API a nombres de archivo
+    model_file_map = {
+        'especies': 'modelo_especies',
+        'hojas': 'modelo_hojas',  # 'hojas' se convierte a 'formas' internamente
+        'plantas': 'modelo_plantas'
+    }
+    
+    for model in ['especies', 'hojas', 'plantas']:
+        with patch('app.routes.retrain.list_model_versions') as mock_list:
+            expected_filename = f'{model_file_map[model]}_v0001.h5'
+            mock_list.return_value = [
+                {'version': 1, 'timestamp': '2024-01-01T12:00:00', 'filename': expected_filename}
+            ]
+            
+            response = client.get(f"/retrain/versions?model={model}")
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data['model'] == model
+            assert data['total_versions'] == 1
+
+
+def test_list_versions_endpoint_hojas_conversion(client, mock_config):
+    """Test que el endpoint convierte 'hojas' a 'formas' correctamente"""
+    with patch('app.routes.retrain.list_model_versions') as mock_list:
+        mock_list.return_value = [
+            {'version': 1, 'timestamp': '2024-01-01T12:00:00', 'filename': 'modelo_hojas_v0001.h5'}
+        ]
+        
+        # El endpoint acepta 'hojas' pero internamente usa 'formas'
+        response = client.get("/retrain/versions?model=hojas")
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data['model'] == 'hojas'  # El response mantiene 'hojas'
+        # Verificar que se llamó con 'formas' internamente
+        mock_list.assert_called_once_with('formas')
 
 
 def test_list_versions_endpoint_invalid_model(client):
@@ -78,6 +145,50 @@ def test_version_info_endpoint(client):
         assert data['model'] == 'especies'
         assert data['version'] == 1
         assert 'version_info' in data
+
+
+def test_version_info_endpoint_all_models(client):
+    """Test que el endpoint obtiene información de versión para todos los modelos"""
+    # Mapeo de nombres de API a nombres de archivo
+    model_file_map = {
+        'especies': 'modelo_especies',
+        'hojas': 'modelo_hojas',  # 'hojas' se convierte a 'formas' internamente
+        'plantas': 'modelo_plantas'
+    }
+    
+    for model in ['especies', 'hojas', 'plantas']:
+        with patch('app.routes.retrain.get_version_info') as mock_get:
+            expected_filename = f'{model_file_map[model]}_v0001.h5'
+            mock_get.return_value = {
+                'version': 1,
+                'timestamp': '2024-01-01T12:00:00',
+                'filename': expected_filename,
+                'notes': f'Test {model}'
+            }
+            
+            response = client.get(f"/retrain/version-info?model={model}&version=1")
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data['model'] == model
+            assert data['version'] == 1
+
+
+def test_version_info_endpoint_hojas_conversion(client):
+    """Test que el endpoint convierte 'hojas' a 'formas' para version-info"""
+    with patch('app.routes.retrain.get_version_info') as mock_get:
+        mock_get.return_value = {
+            'version': 1,
+            'timestamp': '2024-01-01T12:00:00',
+            'filename': 'modelo_hojas_v0001.h5',
+            'notes': 'Test hojas'
+        }
+        
+        response = client.get("/retrain/version-info?model=hojas&version=1")
+        
+        assert response.status_code == 200
+        # Verificar que se llamó con 'formas' internamente
+        mock_get.assert_called_once_with('formas', 1)
 
 
 def test_version_info_endpoint_not_found(client):
@@ -111,6 +222,59 @@ def test_restore_version_endpoint(client):
         assert data['version'] == 1
         # Verificar que se recargó el modelo
         mock_reload.assert_called_once_with('especies')
+
+
+def test_restore_version_endpoint_all_models(client):
+    """Test que el endpoint restaura versiones para todos los modelos"""
+    models = ['especies', 'hojas', 'plantas']
+    # Mapeo de nombres de API a nombres internos para versionado
+    internal_names = {
+        'especies': 'especies',
+        'hojas': 'formas',  # 'hojas' se convierte a 'formas' internamente
+        'plantas': 'plantas'
+    }
+    
+    for model in models:
+        internal_name = internal_names[model]
+        with patch('app.routes.retrain.restore_model_version') as mock_restore, \
+             patch('app.routes.retrain.reload_model') as mock_reload:
+            
+            mock_restore.return_value = {
+                'model_name': internal_name,
+                'version': 1,
+                'restored_at': '2024-01-01T12:00:00',
+                'version_info': {'version': 1}
+            }
+            
+            response = client.post(f"/retrain/restore-version?model={model}&version=1")
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data['status'] == 'success'
+            assert data['model_name'] == internal_name
+            # Verificar que se llamó con el nombre interno correcto
+            mock_restore.assert_called_once_with(internal_name, 1)
+            mock_reload.assert_called_once_with(internal_name)
+
+
+def test_restore_version_endpoint_hojas_conversion(client):
+    """Test que el endpoint convierte 'hojas' a 'formas' para restore-version"""
+    with patch('app.routes.retrain.restore_model_version') as mock_restore, \
+         patch('app.routes.retrain.reload_model') as mock_reload:
+        
+        mock_restore.return_value = {
+            'model_name': 'formas',
+            'version': 1,
+            'restored_at': '2024-01-01T12:00:00',
+            'version_info': {'version': 1}
+        }
+        
+        response = client.post("/retrain/restore-version?model=hojas&version=1")
+        
+        assert response.status_code == 200
+        # Verificar que se llamó con 'formas' internamente
+        mock_restore.assert_called_once_with('formas', 1)
+        mock_reload.assert_called_once_with('formas')
 
 
 def test_restore_version_endpoint_not_found(client):

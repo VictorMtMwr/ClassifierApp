@@ -5,7 +5,7 @@ import tensorflow as tf
 import os
 from ..preprocess import preprocess_image
 from ..utils.locks import predict_lock, safe_predict
-from ..config import SPECIES, SHAPES, PLANTS
+from ..config import SPECIES, SHAPES, PLANTS  # Estas son variables estáticas que se actualizan dinámicamente
 from ..models_loader import get_models
 
 def init_routes(especies, formas, plantas):
@@ -74,28 +74,34 @@ def init_routes(especies, formas, plantas):
         idx2 = int(np.argmax(pred2))
         idx3 = int(np.argmax(pred3))
         
+        # Obtener clases dinámicamente del modelo cargado (lee desde config.py actualizado)
+        from ..config import get_classes_from_model
+        species_classes = get_classes_from_model('especies')
+        shapes_classes = get_classes_from_model('formas')
+        plants_classes = get_classes_from_model('plantas')
+        
         # Validar que los índices estén dentro del rango
-        if idx1 >= len(SPECIES):
-            raise HTTPException(status_code=500, detail=f'Índice de clase fuera de rango: {idx1} >= {len(SPECIES)}')
-        if idx2 >= len(SHAPES):
-            raise HTTPException(status_code=500, detail=f'Índice de clase fuera de rango: {idx2} >= {len(SHAPES)}')
-        if idx3 >= len(PLANTS):
-            raise HTTPException(status_code=500, detail=f'Índice de clase fuera de rango: {idx3} >= {len(PLANTS)}')
+        if idx1 >= len(species_classes):
+            raise HTTPException(status_code=500, detail=f'Índice de clase fuera de rango: {idx1} >= {len(species_classes)}')
+        if idx2 >= len(shapes_classes):
+            raise HTTPException(status_code=500, detail=f'Índice de clase fuera de rango: {idx2} >= {len(shapes_classes)}')
+        if idx3 >= len(plants_classes):
+            raise HTTPException(status_code=500, detail=f'Índice de clase fuera de rango: {idx3} >= {len(plants_classes)}')
 
         result = {
             'model1': {
                 'class': idx1,
-                'class_name': SPECIES[idx1],
+                'class_name': species_classes[idx1],
                 'probability': float(np.max(pred1)),
             },
             'model2': {
                 'class': idx2,
-                'class_name': SHAPES[idx2],
+                'class_name': shapes_classes[idx2],
                 'probability': float(np.max(pred2)),
             },
             'model3': {
                 'class': idx3,
-                'class_name': str(PLANTS[idx3]),
+                'class_name': str(plants_classes[idx3]),
                 'probability': float(np.max(pred3)),
             }
         }

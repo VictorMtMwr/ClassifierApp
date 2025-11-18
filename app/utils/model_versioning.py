@@ -52,23 +52,57 @@ def save_version_metadata(model_name: str, metadata: Dict):
 
 def create_model_version(model_name: str, version_notes: Optional[str] = None) -> Dict:
     """
-    Crea una nueva versión del modelo guardándolo en backups con versionado
+    Crea una nueva versión del modelo guardándolo en backups con versionado.
+    Busca primero modelos versionados en MODEL_DIR, si no encuentra busca sin versión.
+    Después de copiar a backups, elimina versiones antiguas de MODEL_DIR.
     
     Args:
         model_name: Nombre del modelo ('especies', 'formas', 'plantas')
         version_notes: Notas opcionales sobre esta versión
     
     Returns:
-        Dict con información de la versión creada
+        Dict con información de la versión creada (incluye la versión copiada y si se eliminó de MODEL_DIR)
     """
     if model_name not in ['especies', 'formas', 'plantas']:
         raise ValueError(f"Nombre de modelo inválido: {model_name}")
     
-    model_file_map = get_model_file_map()
-    model_path = os.path.join(MODEL_DIR, model_file_map[model_name])
+    import glob
     
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"No se encontró el modelo en {model_path}")
+    model_file_map = get_model_file_map()
+    model_base_name = os.path.splitext(model_file_map[model_name])[0]  # 'modelo_especies', 'modelo_hojas', etc.
+    
+    # Función auxiliar para ordenar por timestamp (más reciente primero)
+    def get_timestamp_from_filename(filename):
+        """Extrae el timestamp del nombre del archivo para ordenar"""
+        basename = os.path.basename(filename)
+        parts = basename.split('_')
+        if len(parts) >= 3:
+            timestamp = parts[-1].replace('.h5', '')
+            return timestamp
+        return ''
+    
+    # Buscar modelo versionado en MODEL_DIR primero
+    pattern_model = os.path.join(MODEL_DIR, f"{model_base_name}_v*_*.h5")
+    versioned_models = glob.glob(pattern_model)
+    current_model_path = None
+    model_in_models_dir = False
+    
+    if versioned_models:
+        # Ordenar por timestamp (más reciente primero)
+        versioned_models.sort(key=get_timestamp_from_filename, reverse=True)
+        current_model_path = versioned_models[0]
+        model_in_models_dir = True
+        print(f"📋 Encontrado modelo versionado en {MODEL_DIR}: {os.path.basename(current_model_path)}")
+    else:
+        # Buscar modelo sin versión en MODEL_DIR
+        model_path = os.path.join(MODEL_DIR, model_file_map[model_name])
+        if os.path.exists(model_path):
+            current_model_path = model_path
+            model_in_models_dir = True
+            print(f"📋 Encontrado modelo sin versión en {MODEL_DIR}: {os.path.basename(model_path)}")
+    
+    if not current_model_path or not os.path.exists(current_model_path):
+        raise FileNotFoundError(f"No se encontró el modelo {model_name} en {MODEL_DIR}")
     
     # Cargar metadatos existentes
     metadata = load_version_metadata(model_name)
@@ -85,11 +119,15 @@ def create_model_version(model_name: str, version_notes: Optional[str] = None) -
     timestamp_str = timestamp.strftime('%Y%m%dT%H%M%S')
     
     # Nombre del archivo de versión
-    version_filename = f"modelo_{model_name}_v{next_version:04d}_{timestamp_str}.h5"
-    version_path = os.path.join(BACKUP_DIR, version_filename)
+    version_filename = f"{model_base_name}_v{next_version:04d}_{timestamp_str}.h5"
+    version_path = os.path.abspath(os.path.join(BACKUP_DIR, version_filename))
+    
+    # Asegurar que el directorio de backups existe
+    os.makedirs(BACKUP_DIR, exist_ok=True)
     
     # Copiar modelo a backup con versionado
-    shutil.copy2(model_path, version_path)
+    shutil.copy2(current_model_path, version_path)
+    print(f"📋 Copiado a {BACKUP_DIR}: {version_filename}")
     
     # Crear información de versión
     version_info = {
@@ -97,9 +135,10 @@ def create_model_version(model_name: str, version_notes: Optional[str] = None) -
         'timestamp': timestamp.isoformat(),
         'timestamp_str': timestamp_str,
         'filename': version_filename,
-        'path': version_path,
+        'path': version_path,  # Ruta absoluta normalizada
         'notes': version_notes or '',
-        'size_bytes': os.path.getsize(version_path)
+        'size_bytes': os.path.getsize(version_path),
+        'source_path': current_model_path
     }
     
     # Agregar a la lista de versiones
@@ -115,9 +154,9 @@ def create_model_version(model_name: str, version_notes: Optional[str] = None) -
             try:
                 if os.path.exists(old_version['path']):
                     os.remove(old_version['path'])
-                    print(f"Eliminada versión antigua: {old_version['filename']}")
+                    print(f"🗑️  Eliminada versión antigua de {BACKUP_DIR}: {old_version['filename']}")
             except Exception as e:
-                print(f"Error eliminando versión antigua {old_version['filename']}: {e}")
+                print(f"⚠️  Error eliminando versión antigua {old_version['filename']}: {e}")
         versions = versions[:MAX_BACKUPS]
     
     # Actualizar metadatos
@@ -128,7 +167,24 @@ def create_model_version(model_name: str, version_notes: Optional[str] = None) -
     # Guardar metadatos
     save_version_metadata(model_name, metadata)
     
-    print(f"✅ Versión {next_version} del modelo {model_name} creada: {version_filename}")
+    # Eliminar versiones antiguas de MODEL_DIR (mantener solo la más reciente si hay múltiples)
+    if model_in_models_dir and versioned_models:
+        # Si hay múltiples versiones en MODEL_DIR, eliminar todas excepto la que acabamos de copiar
+        for old_versioned_model in versioned_models:
+            if old_versioned_model != current_model_path:
+                try:
+                    os.remove(old_versioned_model)
+                    print(f"🗑️  Eliminada versión antigua de {MODEL_DIR}: {os.path.basename(old_versioned_model)}")
+                except Exception as e:
+                    print(f"⚠️  Error eliminando versión antigua de {MODEL_DIR}: {e}")
+        # Eliminar también el modelo versionado que acabamos de copiar (se guardará uno nuevo después)
+        try:
+            os.remove(current_model_path)
+            print(f"🗑️  Eliminado modelo versionado anterior de {MODEL_DIR}: {os.path.basename(current_model_path)}")
+        except Exception as e:
+            print(f"⚠️  Error eliminando modelo anterior de {MODEL_DIR}: {e}")
+    
+    print(f"✅ Versión {next_version} del modelo {model_name} creada en {BACKUP_DIR}: {version_filename}")
     return version_info
 
 
@@ -151,12 +207,21 @@ def list_model_versions(model_name: str) -> List[Dict]:
     # Verificar que los archivos aún existen
     valid_versions = []
     for version in versions:
-        if os.path.exists(version['path']):
-            # Actualizar tamaño si cambió
-            version['size_bytes'] = os.path.getsize(version['path'])
+        # Normalizar la ruta (puede ser relativa o absoluta)
+        version_path = version['path']
+        if not os.path.isabs(version_path):
+            # Si es relativa, intentar construirla desde BACKUP_DIR
+            version_path = os.path.join(BACKUP_DIR, os.path.basename(version_path))
+        else:
+            version_path = os.path.abspath(version_path)
+        
+        if os.path.exists(version_path):
+            # Actualizar tamaño y ruta normalizada
+            version['size_bytes'] = os.path.getsize(version_path)
+            version['path'] = version_path  # Actualizar con ruta normalizada
             valid_versions.append(version)
         else:
-            print(f"⚠️  Archivo de versión no encontrado: {version['path']}")
+            print(f"⚠️  Archivo de versión no encontrado: {version_path}")
     
     # Si hay versiones inválidas, actualizar metadatos
     if len(valid_versions) != len(versions):
@@ -201,7 +266,8 @@ def get_model_version_path(model_name: str, version: Optional[int] = None) -> Op
 
 def restore_model_version(model_name: str, version: int) -> Dict:
     """
-    Restaura una versión específica del modelo, reemplazando el modelo actual
+    Restaura una versión específica del modelo en MODEL_DIR con nombre versionado.
+    Elimina versiones antiguas de MODEL_DIR y guarda la versión restaurada con su nombre versionado.
     
     Args:
         model_name: Nombre del modelo
@@ -210,34 +276,95 @@ def restore_model_version(model_name: str, version: int) -> Dict:
     Returns:
         Dict con información de la versión restaurada
     """
+    import glob
+    
     if model_name not in ['especies', 'formas', 'plantas']:
         raise ValueError(f"Nombre de modelo inválido: {model_name}")
     
     model_file_map = get_model_file_map()
-    model_path = os.path.join(MODEL_DIR, model_file_map[model_name])
+    model_base_name = os.path.splitext(model_file_map[model_name])[0]
     version_path = get_model_version_path(model_name, version)
     
     if version_path is None:
         raise FileNotFoundError(f"No se encontró la versión {version} del modelo {model_name}")
     
-    # Crear backup del modelo actual antes de restaurar
-    if os.path.exists(model_path):
-        timestamp = datetime.utcnow().strftime('%Y%m%dT%H%M%S')
-        pre_restore_backup = os.path.join(BACKUP_DIR, f"modelo_{model_name}_pre_restore_{timestamp}.h5")
-        shutil.copy2(model_path, pre_restore_backup)
-        print(f"Backup del modelo actual creado: {pre_restore_backup}")
+    # Normalizar la ruta de versión
+    if not os.path.isabs(version_path):
+        version_path = os.path.abspath(os.path.join(BACKUP_DIR, os.path.basename(version_path)))
+    else:
+        version_path = os.path.abspath(version_path)
     
-    # Restaurar la versión
-    shutil.copy2(version_path, model_path)
+    if not os.path.exists(version_path):
+        raise FileNotFoundError(f"El archivo de versión no existe: {version_path}")
+    
+    # Función auxiliar para ordenar por timestamp
+    def get_timestamp_from_filename(filename):
+        basename = os.path.basename(filename)
+        parts = basename.split('_')
+        if len(parts) >= 3:
+            timestamp = parts[-1].replace('.h5', '')
+            return timestamp
+        return ''
+    
+    # Buscar versiones antiguas en MODEL_DIR para eliminarlas
+    pattern_model = os.path.join(MODEL_DIR, f"{model_base_name}_v*_*.h5")
+    versioned_models_in_models = glob.glob(pattern_model)
+    
+    # También buscar modelo sin versión
+    model_path_no_version = os.path.join(MODEL_DIR, model_file_map[model_name])
+    existing_models = list(versioned_models_in_models)
+    if os.path.exists(model_path_no_version):
+        existing_models.append(model_path_no_version)
+    
+    # Guardar referencias para restauración en caso de error
+    backup_source_path = None
+    
+    # Crear backup del modelo actual antes de restaurar (si existe)
+    pre_restore_backup = None
+    if existing_models:
+        timestamp = datetime.utcnow().strftime('%Y%m%dT%H%M%S')
+        pre_restore_backup = os.path.join(BACKUP_DIR, f"{model_base_name}_pre_restore_{timestamp}.h5")
+        # Copiar el más reciente como backup
+        if versioned_models_in_models:
+            versioned_models_in_models.sort(key=get_timestamp_from_filename, reverse=True)
+            backup_source_path = versioned_models_in_models[0]
+            shutil.copy2(backup_source_path, pre_restore_backup)
+        else:
+            backup_source_path = model_path_no_version
+            shutil.copy2(model_path_no_version, pre_restore_backup)
+        print(f"📋 Backup del modelo actual creado: {os.path.basename(pre_restore_backup)}")
+    
+    # Eliminar versiones antiguas de MODEL_DIR
+    for old_model in existing_models:
+        try:
+            os.remove(old_model)
+            print(f"🗑️  Eliminada versión antigua de {MODEL_DIR}: {os.path.basename(old_model)}")
+        except Exception as e:
+            print(f"⚠️  Error eliminando versión antigua de {MODEL_DIR}: {e}")
+    
+    # Obtener el nombre del archivo versionado desde BACKUP_DIR
+    version_filename = os.path.basename(version_path)
+    restored_model_path = os.path.join(MODEL_DIR, version_filename)
+    
+    # Copiar la versión restaurada a MODEL_DIR con su nombre versionado
+    shutil.copy2(version_path, restored_model_path)
+    print(f"📋 Versión {version} restaurada en {MODEL_DIR}: {version_filename}")
     
     # Validar que el modelo restaurado se puede cargar
     try:
-        _ = tf.keras.models.load_model(model_path)
+        _ = tf.keras.models.load_model(restored_model_path)
         print(f"✅ Modelo {model_name} restaurado a la versión {version}")
     except Exception as e:
-        # Si falla, restaurar desde el backup
-        if os.path.exists(pre_restore_backup):
-            shutil.copy2(pre_restore_backup, model_path)
+        # Si falla, intentar restaurar desde el backup
+        if pre_restore_backup and os.path.exists(pre_restore_backup) and backup_source_path:
+            # Eliminar el modelo que falló
+            try:
+                os.remove(restored_model_path)
+            except:
+                pass
+            # Restaurar desde el backup a la ruta original
+            shutil.copy2(pre_restore_backup, backup_source_path)
+            print(f"🔄 Modelo original restaurado desde backup")
             raise RuntimeError(f"Error validando modelo restaurado: {e}. Modelo original restaurado.")
         raise
     
@@ -249,7 +376,8 @@ def restore_model_version(model_name: str, version: int) -> Dict:
         'model_name': model_name,
         'version': version,
         'restored_at': datetime.utcnow().isoformat(),
-        'version_info': restored_version
+        'version_info': restored_version,
+        'restored_path': restored_model_path
     }
 
 

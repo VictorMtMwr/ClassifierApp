@@ -89,9 +89,9 @@ def test_predict_endpoint_class_index_validation(client, sample_image_bytes):
         
         # Simular predicción con índice fuera de rango
         # Crear un array donde el máximo está en un índice fuera de rango
-        # SPECIES tiene 10 clases (índices 0-9), así que usamos índice 10
+        # SPECIES tiene 13 clases (índices 0-12), así que usamos índice 13 o mayor
         invalid_pred1 = np.zeros(100)
-        invalid_pred1[10] = 1.0  # Índice 10 está fuera de rango para SPECIES (0-9)
+        invalid_pred1[13] = 1.0  # Índice 13 está fuera de rango para SPECIES (0-12)
         
         # Para los otros modelos, usar predicciones válidas
         valid_pred2 = np.array([0.1, 0.2, 0.3, 0.4])  # 4 clases, válido para SHAPES

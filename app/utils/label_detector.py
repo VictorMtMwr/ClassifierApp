@@ -2,6 +2,7 @@ import os
 import json
 import importlib
 import sys
+import re
 from ..config import DATA_DIR, MODEL_DIR
 
 
@@ -32,6 +33,7 @@ def detect_classes_in_data(data_path):
 def get_current_classes(model_type):
     """
     Obtiene las clases actuales según el tipo de modelo.
+    Usa las variables estáticas que se actualizan dinámicamente mediante reload_config().
     
     Args:
         model_type (str): Tipo de modelo ('especies', 'hojas', 'plantas')
@@ -42,11 +44,12 @@ def get_current_classes(model_type):
     from ..config import SPECIES, SHAPES, PLANTS
     
     if model_type == 'especies':
-        return SPECIES
+        return SPECIES.copy() if hasattr(SPECIES, 'copy') else list(SPECIES)  # Variable estática (lista)
     elif model_type == 'hojas':
-        return SHAPES
+        return SHAPES.copy() if hasattr(SHAPES, 'copy') else list(SHAPES)  # Variable estática (lista)
     elif model_type == 'plantas':
-        return [str(x) for x in PLANTS]  # Convertir booleanos a strings
+        plants = PLANTS.copy() if hasattr(PLANTS, 'copy') else list(PLANTS)  # Variable estática (lista)
+        return [str(x) for x in plants]  # Convertir booleanos a strings
     else:
         return []
 
@@ -102,7 +105,9 @@ def update_config_with_detected_classes(model_type, detected_classes):
     updated_classes = sorted(detected_classes)  # Asegurar orden alfabético
     
     # Determinar el nombre de la variable según el tipo de modelo
+    # IMPORTANTE: Actualizar _DEFAULT_* porque esas son las variables que contienen las listas
     if model_type == 'especies':
+        default_var_name = '_DEFAULT_SPECIES'
         var_name = 'SPECIES'
         # Formatear como lista de strings con saltos de línea para legibilidad
         formatted_classes = []
@@ -111,6 +116,7 @@ def update_config_with_detected_classes(model_type, detected_classes):
         new_content = "[\n" + ",\n".join(formatted_classes) + "\n]"
         
     elif model_type == 'hojas':
+        default_var_name = '_DEFAULT_SHAPES'
         var_name = 'SHAPES'
         # Formatear como lista de strings con saltos de línea para legibilidad
         formatted_classes = []
@@ -119,6 +125,7 @@ def update_config_with_detected_classes(model_type, detected_classes):
         new_content = "[\n" + ",\n".join(formatted_classes) + "\n]"
         
     elif model_type == 'plantas':
+        default_var_name = '_DEFAULT_PLANTS'
         var_name = 'PLANTS'
         # Convertir strings de vuelta a booleanos
         bool_classes = []
@@ -139,26 +146,66 @@ def update_config_with_detected_classes(model_type, detected_classes):
     # Reemplazar la línea correspondiente en el archivo de configuración
     import re
     
-    # Patrón más específico para capturar la variable completa
-    if model_type in ['especies', 'hojas']:
-        pattern = rf"^{var_name}\s*=\s*\[.*?\]"
-        replacement = f"{var_name} = {new_content}"
-    else:  # plantas
-        pattern = rf"^{var_name}\s*=\s*\[.*?\]"
-        replacement = f"{var_name} = {new_content}"
+    # Método mejorado: buscar línea por línea para manejar listas multilínea correctamente
+    # Buscar _DEFAULT_* que es donde realmente está la lista
+    lines = content.split('\n')
+    new_lines = []
+    i = 0
+    found_default = False
     
-    new_file_content = re.sub(pattern, replacement, content, flags=re.MULTILINE | re.DOTALL)
+    while i < len(lines):
+        line = lines[i]
+        # Buscar la línea que define _DEFAULT_* (donde está la lista real)
+        if re.match(rf"^{default_var_name}\s*=\s*\[", line):
+            found_default = True
+            # Agregar la nueva definición
+            new_lines.append(f"{default_var_name} = {new_content}")
+            # Saltar todas las líneas hasta encontrar el corchete de cierre
+            bracket_count = line.count('[') - line.count(']')
+            i += 1
+            while i < len(lines) and bracket_count > 0:
+                bracket_count += lines[i].count('[') - lines[i].count(']')
+                i += 1
+            # No agregar la línea actual (ya la saltamos)
+            continue
+        new_lines.append(line)
+        i += 1
     
-    # Verificar que el reemplazo fue exitoso
-    if new_file_content == content:
-        print(f"Advertencia: No se pudo actualizar {var_name} en config.py")
+    if not found_default:
+        print(f"Advertencia: No se pudo encontrar la definición de {default_var_name} en config.py")
         return False
+    
+    # También actualizar SPECIES/SHAPES/PLANTS para que apunten a la nueva lista
+    # Buscar la línea SPECIES = _DEFAULT_SPECIES.copy() y actualizarla (si existe)
+    lines = new_lines  # Continuar con las líneas ya procesadas
+    new_lines = []
+    i = 0
+    found_var = False
+    
+    while i < len(lines):
+        line = lines[i]
+        # Buscar la línea que define SPECIES/SHAPES/PLANTS
+        # El patrón busca: SPECIES = _DEFAULT_SPECIES.copy()
+        pattern = rf"^{var_name}\s*=\s*{default_var_name}\.copy\(\)"
+        if re.match(pattern, line):
+            found_var = True
+            # Mantener la línea tal cual (ya apunta a _DEFAULT_*)
+            new_lines.append(line)
+            i += 1
+            continue
+        new_lines.append(line)
+        i += 1
+    
+    # Si no se encuentra la línea SPECIES = _DEFAULT_SPECIES.copy(), no es crítico
+    # porque se recargará cuando se recargue el módulo
+    
+    new_file_content = '\n'.join(new_lines)
     
     # Escribir el archivo actualizado
     with open(config_path, 'w', encoding='utf-8') as f:
         f.write(new_file_content)
     
-    print(f"Configuración actualizada: {var_name} ahora tiene {len(updated_classes)} clases en orden alfabético")
+    print(f"✅ Configuración actualizada: {var_name} ahora tiene {len(updated_classes)} clases en orden alfabético")
     return True
 
 
@@ -262,15 +309,74 @@ def update_config_with_new_classes(model_type, new_classes):
 def reload_config():
     """
     Recarga el módulo de configuración para aplicar los cambios sin reiniciar la aplicación.
+    También actualiza las variables estáticas SPECIES, SHAPES, PLANTS desde el archivo.
     """
     try:
         # Recargar el módulo de configuración
         if 'app.config' in sys.modules:
             importlib.reload(sys.modules['app.config'])
-            print("Configuración recargada exitosamente")
+            
+            # Leer las clases actualizadas directamente desde el archivo config.py
+            # para asegurar que las variables estáticas se actualicen correctamente
+            config_path = os.path.join(os.path.dirname(__file__), '..', 'config.py')
+            if os.path.exists(config_path):
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config_lines = f.readlines()
+                
+                import ast
+                
+                # Función auxiliar para extraer lista desde líneas
+                def extract_list_from_lines(lines, var_name):
+                    """Extrae una lista de una variable en config.py manejando listas multilínea"""
+                    result_lines = []
+                    in_var = False
+                    bracket_count = 0
+                    for i, line in enumerate(lines):
+                        if re.match(rf"^{var_name}\s*=\s*\[", line):
+                            in_var = True
+                            result_lines.append(line)
+                            bracket_count = line.count('[') - line.count(']')
+                            continue
+                        if in_var:
+                            result_lines.append(line)
+                            bracket_count += line.count('[') - line.count(']')
+                            if bracket_count == 0:
+                                break
+                    if result_lines:
+                        var_content = ''.join(result_lines)
+                        # Extraer solo la parte de la lista
+                        match = re.search(r'\[(.*)\]', var_content, re.DOTALL)
+                        if match:
+                            try:
+                                return ast.literal_eval('[' + match.group(1) + ']')
+                            except:
+                                pass
+                    return None
+                
+                # Actualizar _DEFAULT_SPECIES y SPECIES
+                species_list = extract_list_from_lines(config_lines, '_DEFAULT_SPECIES')
+                if species_list is not None:
+                    sys.modules['app.config']._DEFAULT_SPECIES = species_list
+                    sys.modules['app.config'].SPECIES = species_list.copy()
+                
+                # Actualizar _DEFAULT_SHAPES y SHAPES
+                shapes_list = extract_list_from_lines(config_lines, '_DEFAULT_SHAPES')
+                if shapes_list is not None:
+                    sys.modules['app.config']._DEFAULT_SHAPES = shapes_list
+                    sys.modules['app.config'].SHAPES = shapes_list.copy()
+                
+                # Actualizar _DEFAULT_PLANTS y PLANTS
+                plants_list = extract_list_from_lines(config_lines, '_DEFAULT_PLANTS')
+                if plants_list is not None:
+                    sys.modules['app.config']._DEFAULT_PLANTS = plants_list
+                    sys.modules['app.config'].PLANTS = plants_list.copy()
+            
+            print("✅ Configuración recargada exitosamente")
             return True
     except Exception as e:
-        print(f"Error al recargar configuración: {e}")
+        print(f"⚠️  Error al recargar configuración: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 

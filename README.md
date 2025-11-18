@@ -448,15 +448,5 @@ Para agregar nuevos modelos o funcionalidades:
 - Verificar que `backups/` tenga permisos de escritura
 - Verificar que los archivos JSON de metadatos se creen correctamente
 
-## Licencia
-
-[Especificar licencia]
-
-## Contribuciones
-
-[Instrucciones para contribuir]
-
-## Contacto
-
-[Información de contacto]
-
+## Test
+pytest --cov=app --cov-report=html

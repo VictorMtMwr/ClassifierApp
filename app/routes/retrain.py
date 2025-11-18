@@ -162,7 +162,22 @@ def init_retrain_route():
                 print(f"{'='*60}\n")
             
             print(f"Reentrenando modelo {model_name}...")
-            model_path = os.path.join(MODEL_DIR, f"modelo_{model_name}.h5")
+            
+            # Buscar el modelo actual (puede estar versionado o sin versión)
+            from ..models_loader import find_model_path
+            try:
+                model_path = find_model_path('formas' if model_name == 'hojas' else model_name)
+                print(f"📋 Modelo actual encontrado: {os.path.basename(model_path)}")
+            except FileNotFoundError:
+                # Si no existe modelo versionado, usar ruta sin versión (primera vez)
+                model_file_map = {
+                    'especies': 'modelo_especies.h5',
+                    'hojas': 'modelo_hojas.h5',
+                    'plantas': 'modelo_plantas.h5'
+                }
+                model_path = os.path.join(MODEL_DIR, model_file_map[model_name])
+                print(f"📋 Modelo no encontrado, se creará nuevo: {os.path.basename(model_path)}")
+            
             data_path = os.path.join(DATA_DIR, model_name)
 
             # Detectar clases en los datos DESPUÉS de descargar (si se descargaron)
@@ -173,15 +188,27 @@ def init_retrain_route():
             
             print(f"Clases detectadas en los datos: {num_detected_classes} ({detected_classes})")
             
+            # Hacer backup de las clases actuales ANTES de actualizar
+            from ..config import backup_classes, restore_classes, clear_classes_backup
+            backup_created = backup_classes()
+            
             # SIEMPRE actualizar la configuración con todas las clases detectadas en orden alfabético
             # Esto asegura que el orden en config.py coincida con el orden que usa ImageDataGenerator
             print(f"Actualizando configuración con todas las clases detectadas en orden alfabético...")
-            if update_config_with_detected_classes(model_name, detected_classes):
-                # Recargar la configuración para aplicar los cambios
-                reload_config()
-                print("✅ Configuración actualizada y recargada exitosamente.")
-            else:
-                print("⚠️  Error al actualizar la configuración.")
+            config_updated = False
+            try:
+                if update_config_with_detected_classes(model_name, detected_classes):
+                    # Recargar la configuración para aplicar los cambios
+                    reload_config()
+                    config_updated = True
+                    print("✅ Configuración actualizada y recargada exitosamente.")
+                else:
+                    print("⚠️  Error al actualizar la configuración.")
+            except Exception as config_error:
+                print(f"⚠️  Error al actualizar la configuración: {config_error}")
+                # Restaurar clases si hay error
+                if backup_created:
+                    restore_classes()
             
             if class_info['has_changes']:
                 print(f"Nuevas clases detectadas: {class_info['new_classes']}")
@@ -211,194 +238,203 @@ def init_retrain_route():
                 print("   💡 El entrenamiento será más lento pero funcionará correctamente")
 
             # Cargar y entrenar en GPU si hay, de lo contrario en CPU
-            with tf.device(device):
-                model = tf.keras.models.load_model(model_path)
-                
-                # Verificar el número de clases en el modelo actual
-                # Manejar casos donde output puede ser una lista o un tensor
-                if isinstance(model.output, list):
-                    current_model_classes = model.output[0].shape[-1]
-                else:
-                    current_model_classes = model.output.shape[-1]
-                print(f"Clases en el modelo actual: {current_model_classes}")
-                print(f"Clases detectadas en los datos: {num_detected_classes}")
-                
-                # Ajustar modelo si el número de clases no coincide
-                if current_model_classes != num_detected_classes:
-                    print(f"Ajustando modelo: de {current_model_classes} a {num_detected_classes} clases...")
+            # Envolver todo el proceso de entrenamiento en try-except para restaurar clases si falla
+            try:
+                with tf.device(device):
+                    model = tf.keras.models.load_model(model_path)
                     
-                    # Calcular cuántas clases faltan
-                    classes_to_add = num_detected_classes - current_model_classes
-                    
-                    if classes_to_add > 0:
-                        # Obtener las clases nuevas detectadas
-                        new_classes_from_config = class_info.get('new_classes', [])
-                        
-                        # Crear un generador temporal para obtener el orden exacto de clases
-                        datagen = ImageDataGenerator(rescale=1./255)
-                        temp_gen = datagen.flow_from_directory(
-                            os.path.join(data_path, "train"),
-                            target_size=(128, 128),
-                            batch_size=1,
-                            class_mode='categorical',
-                            shuffle=False
-                        )
-                        # Obtener todas las clases en el orden que el generador las tiene
-                        all_classes_sorted = sorted(temp_gen.class_indices.keys(), key=lambda x: temp_gen.class_indices[x])
-                        
-                        # Las clases que el modelo tiene actualmente son las primeras current_model_classes
-                        model_current_classes = all_classes_sorted[:current_model_classes]
-                        
-                        # Las clases que faltan son las que están en all_classes_sorted pero no en model_current_classes
-                        new_classes_needed = [cls for cls in all_classes_sorted if cls not in model_current_classes]
-                        
-                        # Asegurarse de que tenemos exactamente classes_to_add clases
-                        if len(new_classes_needed) != classes_to_add:
-                            # Si hay discrepancia, tomar las últimas classes_to_add clases
-                            new_classes_needed = all_classes_sorted[-classes_to_add:]
-                        
-                        print(f"Agregando {len(new_classes_needed)} clases al modelo: {new_classes_needed}")
-                        model = adjust_model_for_new_classes(model, model_name, new_classes_needed)
-                        print("Modelo ajustado exitosamente.")
-                        
-                        # Limpiar el generador temporal
-                        del temp_gen
+                    # Verificar el número de clases en el modelo actual
+                    # Manejar casos donde output puede ser una lista o un tensor
+                    if isinstance(model.output, list):
+                        current_model_classes = model.output[0].shape[-1]
                     else:
-                        # El modelo tiene más clases que las detectadas - esto es problemático
-                        # Por ahora, creamos un nuevo modelo con el número correcto de clases
-                        print(f"ADVERTENCIA: El modelo tiene más clases ({current_model_classes}) que las detectadas ({num_detected_classes})")
-                        print("Reconstruyendo la capa de salida...")
+                        current_model_classes = model.output.shape[-1]
+                    print(f"Clases en el modelo actual: {current_model_classes}")
+                    print(f"Clases detectadas en los datos: {num_detected_classes}")
+                    
+                    # Ajustar modelo si el número de clases no coincide
+                    if current_model_classes != num_detected_classes:
+                        print(f"Ajustando modelo: de {current_model_classes} a {num_detected_classes} clases...")
                         
-                        # Obtener la penúltima capa
-                        penultimate_layer = model.layers[-2]
+                        # Calcular cuántas clases faltan
+                        classes_to_add = num_detected_classes - current_model_classes
                         
-                        # Crear nueva capa de salida con el número correcto de clases
-                        if model_name == 'plantas':
-                            new_output = tf.keras.layers.Dense(
-                                num_detected_classes,
-                                activation='sigmoid',
-                                name='new_output'
-                            )(penultimate_layer.output)
+                        if classes_to_add > 0:
+                            # Obtener las clases nuevas detectadas directamente
+                            new_classes_from_detection = class_info.get('new_classes', [])
+                            
+                            # Crear un generador temporal para obtener el orden exacto de clases que usa ImageDataGenerator
+                            datagen = ImageDataGenerator(rescale=1./255)
+                            temp_gen = datagen.flow_from_directory(
+                                os.path.join(data_path, "train"),
+                                target_size=(128, 128),
+                                batch_size=1,
+                                class_mode='categorical',
+                                shuffle=False
+                            )
+                            # Obtener todas las clases en el orden que el generador las tiene (orden alfabético)
+                            all_classes_sorted = sorted(temp_gen.class_indices.keys(), key=lambda x: temp_gen.class_indices[x])
+                            
+                            # Obtener las clases actuales del modelo desde la configuración
+                            current_classes_from_config = class_info.get('current_classes', [])
+                            
+                            # Las clases nuevas son las que están en detected_classes pero no en current_classes
+                            # Usar el orden del generador para mantener consistencia
+                            new_classes_needed = [cls for cls in all_classes_sorted if cls not in current_classes_from_config]
+                            
+                            # Validar que tenemos exactamente classes_to_add clases
+                            if len(new_classes_needed) != classes_to_add:
+                                print(f"⚠️  Advertencia: Discrepancia en número de clases nuevas.")
+                                print(f"   Esperadas: {classes_to_add}, Calculadas: {len(new_classes_needed)}")
+                                print(f"   Clases nuevas detectadas: {new_classes_from_detection}")
+                                print(f"   Clases nuevas calculadas: {new_classes_needed}")
+                                # Si hay discrepancia, usar las clases nuevas detectadas directamente
+                                # pero asegurarse de que estén en el orden del generador
+                                if new_classes_from_detection:
+                                    new_classes_needed = [cls for cls in all_classes_sorted if cls in new_classes_from_detection]
+                            
+                            print(f"Agregando {len(new_classes_needed)} clases al modelo: {new_classes_needed}")
+                            model = adjust_model_for_new_classes(model, model_name, new_classes_needed)
+                            print("Modelo ajustado exitosamente.")
+                            
+                            # Limpiar el generador temporal
+                            del temp_gen
                         else:
-                            new_output = tf.keras.layers.Dense(
-                                num_detected_classes,
-                                activation='softmax',
-                                name='new_output'
-                            )(penultimate_layer.output)
-                        
-                        # Crear nuevo modelo
-                        model = tf.keras.Model(inputs=model.input, outputs=new_output)
-                        print("Modelo reconstruido con el número correcto de clases.")
-                else:
-                    print("El modelo ya tiene el número correcto de clases.")
-
-                # Detectar recursos disponibles y ajustar batch size automáticamente
-                if use_gpu:
-                    # Obtener información de VRAM disponible
-                    try:
-                        gpu_devices = tf.config.list_physical_devices('GPU')
-                        if gpu_devices:
-                            # Intentar obtener información de memoria de GPU
-                            try:
-                                memory_info = tf.config.experimental.get_memory_info('GPU:0')
-                                total_memory = memory_info['limit'] / (1024**3)  # Convertir a GB
-                                # Estimar memoria disponible (restar ~500MB para sistema y otros procesos)
-                                available_memory_gb = total_memory - 0.5
-                                print(f"   💾 VRAM total detectada: {total_memory:.2f} GB")
-                                print(f"   💾 VRAM disponible estimada: {available_memory_gb:.2f} GB")
-                            except:
-                                # Fallback: usar detalles de dispositivo
-                                try:
-                                    details = tf.config.experimental.get_device_details(gpu_devices[0])
-                                    if 'device_memory_size' in details:
-                                        total_memory = details['device_memory_size'] / (1024**3)
-                                        available_memory_gb = total_memory - 0.5
-                                        print(f"   💾 VRAM total detectada: {total_memory:.2f} GB")
-                                        print(f"   💾 VRAM disponible estimada: {available_memory_gb:.2f} GB")
-                                    else:
-                                        # Si no podemos obtener info, usar valores conservadores
-                                        available_memory_gb = 1.5  # Asumir ~1.5GB disponible
-                                        print(f"   ⚠️  No se pudo detectar VRAM exacta, usando estimación conservadora: {available_memory_gb:.2f} GB")
-                                except:
-                                    available_memory_gb = 1.5
-                                    print(f"   ⚠️  No se pudo detectar VRAM, usando estimación conservadora: {available_memory_gb:.2f} GB")
+                            # El modelo tiene más clases que las detectadas - esto es problemático
+                            # Por ahora, creamos un nuevo modelo con el número correcto de clases
+                            print(f"ADVERTENCIA: El modelo tiene más clases ({current_model_classes}) que las detectadas ({num_detected_classes})")
+                            print("Reconstruyendo la capa de salida...")
                             
-                            # Calcular batch_size óptimo según VRAM disponible
-                            # Estimación: cada imagen 128x128x3 usa ~0.2MB en memoria (con gradientes y overhead)
-                            # Con modelo cargado, reservamos ~2GB, así que usamos el resto para batches
-                            # batch_size * 0.2MB * 4 (overhead) = memoria por batch
-                            # Queremos usar ~60% de la memoria disponible para batches
-                            memory_for_batches_gb = available_memory_gb * 0.6
-                            memory_for_batches_mb = memory_for_batches_gb * 1024
+                            # Obtener la penúltima capa
+                            penultimate_layer = model.layers[-2]
                             
-                            # Cada batch usa aproximadamente: batch_size * 0.2MB * 4 = batch_size * 0.8MB
-                            # batch_size = memory_for_batches_mb / 0.8
-                            estimated_batch_size = int(memory_for_batches_mb / 0.8)
-                            
-                            # Ajustar según rangos de VRAM conocidos
-                            if available_memory_gb >= 8:
-                                # GPU con 8GB+ (RTX 3070, 3080, etc.)
-                                batch_size = min(estimated_batch_size, 256)
-                            elif available_memory_gb >= 4:
-                                # GPU con 4-8GB (GTX 1650 Ti, RTX 2060, etc.)
-                                batch_size = min(estimated_batch_size, 128)
-                            elif available_memory_gb >= 2:
-                                # GPU con 2-4GB
-                                batch_size = min(estimated_batch_size, 64)
+                            # Crear nueva capa de salida con el número correcto de clases
+                            if model_name == 'plantas':
+                                new_output = tf.keras.layers.Dense(
+                                    num_detected_classes,
+                                    activation='sigmoid',
+                                    name='new_output'
+                                )(penultimate_layer.output)
                             else:
-                                # GPU con menos de 2GB disponible
-                                batch_size = min(estimated_batch_size, 32)
+                                new_output = tf.keras.layers.Dense(
+                                    num_detected_classes,
+                                    activation='softmax',
+                                    name='new_output'
+                                )(penultimate_layer.output)
                             
-                            # Asegurar batch_size mínimo
-                            if batch_size < 8:
-                                batch_size = 8
+                            # Crear nuevo modelo
+                            model = tf.keras.Model(inputs=model.input, outputs=new_output)
+                            print("Modelo reconstruido con el número correcto de clases.")
+                    else:
+                        print("El modelo ya tiene el número correcto de clases.")
+
+                    # Detectar recursos disponibles y ajustar batch size automáticamente
+                    if use_gpu:
+                        # Obtener información de VRAM disponible
+                        try:
+                            gpu_devices = tf.config.list_physical_devices('GPU')
+                            if gpu_devices:
+                                # Intentar obtener información de memoria de GPU
+                                try:
+                                    memory_info = tf.config.experimental.get_memory_info('GPU:0')
+                                    total_memory = memory_info['limit'] / (1024**3)  # Convertir a GB
+                                    # Estimar memoria disponible (restar ~500MB para sistema y otros procesos)
+                                    available_memory_gb = total_memory - 0.5
+                                    print(f"   💾 VRAM total detectada: {total_memory:.2f} GB")
+                                    print(f"   💾 VRAM disponible estimada: {available_memory_gb:.2f} GB")
+                                except:
+                                    # Fallback: usar detalles de dispositivo
+                                    try:
+                                        details = tf.config.experimental.get_device_details(gpu_devices[0])
+                                        if 'device_memory_size' in details:
+                                            total_memory = details['device_memory_size'] / (1024**3)
+                                            available_memory_gb = total_memory - 0.5
+                                            print(f"   💾 VRAM total detectada: {total_memory:.2f} GB")
+                                            print(f"   💾 VRAM disponible estimada: {available_memory_gb:.2f} GB")
+                                        else:
+                                            # Si no podemos obtener info, usar valores conservadores
+                                            available_memory_gb = 1.5  # Asumir ~1.5GB disponible
+                                            print(f"   ⚠️  No se pudo detectar VRAM exacta, usando estimación conservadora: {available_memory_gb:.2f} GB")
+                                    except:
+                                        available_memory_gb = 1.5
+                                        print(f"   ⚠️  No se pudo detectar VRAM, usando estimación conservadora: {available_memory_gb:.2f} GB")
                             
-                            print(f"   📦 Batch size calculado automáticamente: {batch_size} (basado en {available_memory_gb:.2f} GB VRAM disponible)")
-                            print(f"   ⚠️  Si hay OOM, se reducirá automáticamente")
-                        else:
-                            batch_size = 64
-                            print(f"   📦 Batch size por defecto: {batch_size} (no se detectó GPU)")
-                    except Exception as e:
-                        print(f"   ⚠️  Error detectando VRAM: {e}")
-                        batch_size = 64  # Fallback conservador
-                        print(f"   📦 Usando batch size conservador: {batch_size}")
-                else:
-                    # CPU: usar batch size más pequeño
-                    batch_size = 32
-                    print(f"   📦 Batch size para CPU: {batch_size}")
-                
-                print(f"   📦 Configurando batch size: {batch_size} {'(GPU optimizado)' if use_gpu else '(CPU)'}")
-                
-                datagen = ImageDataGenerator(rescale=1./255, validation_split=0.2)
-                train_gen = datagen.flow_from_directory(
-                    os.path.join(data_path, "train"),
-                    target_size=(128, 128),
-                    batch_size=batch_size,
-                    subset='training',
-                    class_mode='categorical'
-                )
-                val_gen = datagen.flow_from_directory(
-                    os.path.join(data_path, "train"),
-                    target_size=(128, 128),
-                    batch_size=batch_size,
-                    subset='validation',
-                    class_mode='categorical'
-                )
-                
-                # Verificar que el número de clases del generador coincide con el modelo
-                train_num_classes = train_gen.num_classes
-                # Manejar casos donde output puede ser una lista o un tensor
-                if isinstance(model.output, list):
-                    model_output_classes = model.output[0].shape[-1]
-                else:
-                    model_output_classes = model.output.shape[-1]
-                print(f"Verificación final: Generador tiene {train_num_classes} clases, Modelo tiene {model_output_classes} clases")
-                
-                if train_num_classes != model_output_classes:
-                    raise ValueError(
-                        f"Incompatibilidad: El generador tiene {train_num_classes} clases pero el modelo tiene {model_output_classes} clases. "
-                        f"Ajuste el modelo antes de continuar."
+                                # Calcular batch_size óptimo según VRAM disponible
+                                # Estimación: cada imagen 128x128x3 usa ~0.2MB en memoria (con gradientes y overhead)
+                                # Con modelo cargado, reservamos ~2GB, así que usamos el resto para batches
+                                # batch_size * 0.2MB * 4 (overhead) = memoria por batch
+                                # Queremos usar ~60% de la memoria disponible para batches
+                                memory_for_batches_gb = available_memory_gb * 0.6
+                                memory_for_batches_mb = memory_for_batches_gb * 1024
+                                
+                                # Cada batch usa aproximadamente: batch_size * 0.2MB * 4 = batch_size * 0.8MB
+                                # batch_size = memory_for_batches_mb / 0.8
+                                estimated_batch_size = int(memory_for_batches_mb / 0.8)
+                                
+                                # Ajustar según rangos de VRAM conocidos
+                                if available_memory_gb >= 8:
+                                    # GPU con 8GB+ (RTX 3070, 3080, etc.)
+                                    batch_size = min(estimated_batch_size, 256)
+                                elif available_memory_gb >= 4:
+                                    # GPU con 4-8GB (GTX 1650 Ti, RTX 2060, etc.)
+                                    batch_size = min(estimated_batch_size, 128)
+                                elif available_memory_gb >= 2:
+                                    # GPU con 2-4GB
+                                    batch_size = min(estimated_batch_size, 64)
+                                else:
+                                    # GPU con menos de 2GB disponible
+                                    batch_size = min(estimated_batch_size, 32)
+                                
+                                # Asegurar batch_size mínimo
+                                if batch_size < 8:
+                                    batch_size = 8
+                                
+                                print(f"   📦 Batch size calculado automáticamente: {batch_size} (basado en {available_memory_gb:.2f} GB VRAM disponible)")
+                                print(f"   ⚠️  Si hay OOM, se reducirá automáticamente")
+                            else:
+                                batch_size = 64
+                                print(f"   📦 Batch size por defecto: {batch_size} (no se detectó GPU)")
+                        except Exception as e:
+                            print(f"   ⚠️  Error detectando VRAM: {e}")
+                            batch_size = 64  # Fallback conservador
+                            print(f"   📦 Usando batch size conservador: {batch_size}")
+                    else:
+                        # CPU: usar batch size más pequeño
+                        batch_size = 32
+                        print(f"   📦 Batch size para CPU: {batch_size}")
+                        
+                    print(f"   📦 Configurando batch size: {batch_size} {'(GPU optimizado)' if use_gpu else '(CPU)'}")
+                    
+                    datagen = ImageDataGenerator(rescale=1./255, validation_split=0.2)
+                    train_gen = datagen.flow_from_directory(
+                        os.path.join(data_path, "train"),
+                        target_size=(128, 128),
+                        batch_size=batch_size,
+                        subset='training',
+                        class_mode='categorical'
                     )
+                    val_gen = datagen.flow_from_directory(
+                        os.path.join(data_path, "train"),
+                        target_size=(128, 128),
+                        batch_size=batch_size,
+                        subset='validation',
+                        class_mode='categorical'
+                    )
+                    
+                    # Verificar que el número de clases del generador coincide con el modelo
+                    train_num_classes = train_gen.num_classes
+                    # Manejar casos donde output puede ser una lista o un tensor
+                    if isinstance(model.output, list):
+                        model_output_classes = model.output[0].shape[-1]
+                    else:
+                        model_output_classes = model.output.shape[-1]
+                    print(f"Verificación final: Generador tiene {train_num_classes} clases, Modelo tiene {model_output_classes} clases")
+                    
+                    if train_num_classes != model_output_classes:
+                        raise ValueError(
+                            f"Incompatibilidad: El generador tiene {train_num_classes} clases pero el modelo tiene {model_output_classes} clases. "
+                            f"Ajuste el modelo antes de continuar."
+                        )
 
                 # Verificar en qué dispositivo está el modelo antes de compilar
                 print(f"\n📍 Verificando dispositivo del modelo...")
@@ -563,43 +599,168 @@ def init_retrain_route():
                     else:
                         # Re-lanzar el error si no es de memoria
                         raise
+                
+                    # Si llegamos aquí, el entrenamiento fue exitoso
+                    print(f"\n✅ Entrenamiento completado exitosamente para {model_name}")
 
+            except Exception as training_error:
+                # Si hay cualquier error durante el entrenamiento, restaurar clases
+                print(f"\n❌ ERROR durante el entrenamiento del modelo {model_name}: {training_error}")
+                print(f"   Tipo de error: {type(training_error).__name__}")
+                import traceback
+                traceback.print_exc()
+                
+                # Restaurar clases desde backup si existe
+                if backup_created:
+                    print("🔄 Restaurando clases desde backup debido al error en el entrenamiento...")
+                    restore_classes()
+                    print("✅ Clases restauradas a su estado anterior.")
+                
+                # Re-lanzar el error para que se maneje en el bloque except externo
+                raise
+
+            # Variable para almacenar la versión creada (para restauración en caso de error)
+            previous_version_info = None
+            version_created = False
+            
             try:
+                # Convertir 'hojas' a 'formas' para el sistema de versionado
+                # (el endpoint usa 'hojas' pero internamente se usa 'formas')
+                versioning_model_name = 'formas' if model_name == 'hojas' else model_name
+                
+                # Buscar si existe un modelo en MODEL_DIR (versionado o sin versión)
+                model_file_map = {
+                    'especies': 'modelo_especies.h5',
+                    'hojas': 'modelo_hojas.h5',
+                    'plantas': 'modelo_plantas.h5'
+                }
+                model_base_name = os.path.splitext(model_file_map[model_name])[0]
+                
+                import glob
+                
+                # Función auxiliar para ordenar por timestamp (más reciente primero)
+                def get_timestamp_from_filename(filename):
+                    basename = os.path.basename(filename)
+                    parts = basename.split('_')
+                    if len(parts) >= 3:
+                        timestamp = parts[-1].replace('.h5', '')
+                        return timestamp
+                    return ''
+                
+                # Buscar modelo versionado en MODEL_DIR
+                pattern_model = os.path.join(MODEL_DIR, f"{model_base_name}_v*_*.h5")
+                versioned_models = glob.glob(pattern_model)
+                if versioned_models:
+                    versioned_models.sort(key=get_timestamp_from_filename, reverse=True)
+                    existing_model = versioned_models[0]
+                else:
+                    existing_model = None
+                
+                # Si no hay modelo versionado, buscar sin versión
+                if not existing_model:
+                    existing_model = os.path.join(MODEL_DIR, model_file_map[model_name])
+                    if not os.path.exists(existing_model):
+                        existing_model = None
+                
                 # Crear versión del modelo actual ANTES de guardar el nuevo
                 # Esto preserva el modelo anterior en backups
-                if os.path.exists(model_path):
+                if existing_model and os.path.exists(existing_model):
                     try:
                         from datetime import datetime
-                        version_info = create_model_version(
-                            model_name, 
+                        previous_version_info = create_model_version(
+                            versioning_model_name, 
                             version_notes=f"Reentrenamiento automático - {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}"
                         )
-                        print(f"✅ Versión {version_info['version']} del modelo anterior creada: {version_info['filename']}")
-                    except Exception as version_error:
-                        print(f"⚠️  Error creando versión del modelo anterior: {version_error}")
+                        version_created = True
+                        print(f"✅ Versión {previous_version_info['version']} del modelo {model_name} anterior guardada en backups: {previous_version_info['filename']}")
+                    except FileNotFoundError as version_error:
+                        print(f"⚠️  No se pudo crear versión del modelo {model_name} anterior: {version_error}")
+                        print(f"   Esto puede ocurrir si es la primera vez que se entrena este modelo.")
                         print(f"   Continuando con el guardado del nuevo modelo...")
+                    except Exception as version_error:
+                        print(f"⚠️  Error creando versión del modelo {model_name} anterior: {version_error}")
+                        print(f"   Continuando con el guardado del nuevo modelo...")
+                else:
+                    print(f"ℹ️  Modelo {model_name} no existe aún, se creará la versión 1 sin backup previo.")
                 
-                # Guardar nuevo modelo
-                model.save(model_path)
+                # Generar nombre versionado para el nuevo modelo
+                from datetime import datetime
+                from ..utils.model_versioning import load_version_metadata
+                metadata = load_version_metadata(versioning_model_name)
+                versions = metadata.get('versions', [])
+                
+                # Calcular siguiente versión (si no se creó versión antes, será 1)
+                if version_created and previous_version_info:
+                    next_version = previous_version_info['version'] + 1
+                elif versions:
+                    next_version = max(v['version'] for v in versions) + 1
+                else:
+                    next_version = 1
+                
+                timestamp = datetime.utcnow()
+                timestamp_str = timestamp.strftime('%Y%m%dT%H%M%S')
+                new_version_filename = f"{model_base_name}_v{next_version:04d}_{timestamp_str}.h5"
+                new_model_path = os.path.join(MODEL_DIR, new_version_filename)
+                
+                # Guardar nuevo modelo con nombre versionado
+                print(f"💾 Guardando nuevo modelo entrenado como versión {next_version} en {MODEL_DIR}: {new_version_filename}")
+                model.save(new_model_path)
 
                 # Validar que el modelo guardado se puede cargar
-                _ = tf.keras.models.load_model(model_path)
-                print(f"Modelo {model_name} actualizado y validado.")
+                _ = tf.keras.models.load_model(new_model_path)
+                print(f"✅ Modelo {model_name} versión {next_version} guardado y validado: {new_version_filename}")
                 
                 # Recargar el modelo en el sistema global para que esté disponible para predicciones
                 print(f"Recargando modelo {model_name} en el sistema de predicción...")
                 try:
-                    reload_model(model_name)
+                    # Convertir 'hojas' a 'formas' para reload_model
+                    # (el endpoint usa 'hojas' pero internamente se usa 'formas')
+                    reload_model_name = 'formas' if model_name == 'hojas' else model_name
+                    reload_model(reload_model_name)
                     print(f"✅ Modelo {model_name} recargado y disponible para predicciones.")
+                    
+                    # Si todo fue exitoso, limpiar el backup de clases
+                    from ..config import clear_classes_backup
+                    clear_classes_backup()
                 except Exception as reload_error:
                     print(f"⚠️  Error al recargar modelo {model_name} para predicciones: {reload_error}")
                     print(f"   El modelo fue guardado correctamente, pero será necesario reiniciar la aplicación para usarlo.")
-
-            except Exception as e:
-                print(f"Error al actualizar modelo {model_name}: {e}")
-                # Nota: Si hay error, el modelo anterior ya está guardado en versiones
-                # Se puede restaurar usando el endpoint de restauración de versiones
-                print(f"💡 Puedes restaurar una versión anterior usando el endpoint /retrain/restore-version")
+                    # Restaurar clases si hay error en recarga
+                    if backup_created:
+                        restore_classes()
+                        raise  # Re-lanzar el error para que se maneje en el bloque except externo
+                    
+            except Exception as save_error:
+                # Si hay error al guardar o validar el modelo, restaurar la versión anterior
+                print(f"\n❌ ERROR al guardar o validar el modelo {model_name}: {save_error}")
+                
+                # Restaurar clases desde backup si existe
+                from ..config import restore_classes
+                if backup_created:
+                    print("🔄 Restaurando clases desde backup debido al error...")
+                    restore_classes()
+                
+                if version_created and previous_version_info:
+                    try:
+                        from ..utils.model_versioning import restore_model_version
+                        versioning_model_name = 'formas' if model_name == 'hojas' else model_name
+                        print(f"🔄 Restaurando versión anterior (v{previous_version_info['version']}) del modelo {model_name}...")
+                        restore_result = restore_model_version(versioning_model_name, previous_version_info['version'])
+                        
+                        # Recargar el modelo restaurado
+                        reload_model_name = 'formas' if model_name == 'hojas' else model_name
+                        reload_model(reload_model_name)
+                        print(f"✅ Modelo {model_name} restaurado a la versión {previous_version_info['version']} y recargado.")
+                        print(f"   El modelo anterior está disponible para predicciones.")
+                    except Exception as restore_error:
+                        print(f"❌ ERROR crítico: No se pudo restaurar la versión anterior: {restore_error}")
+                        print(f"   Por favor, restaura manualmente usando: POST /retrain/restore-version?model={model_name}&version={previous_version_info['version']}")
+                else:
+                    print(f"⚠️  No se pudo restaurar automáticamente porque no se creó versión previa.")
+                    print(f"   El modelo original debería estar intacto si no se guardó el nuevo.")
+                
+                # Re-lanzar el error para que se registre en el estado del entrenamiento
+                raise
 
         # Detectar clases antes de iniciar el entrenamiento para mostrar información inmediata
         class_info = detect_new_classes(model)
@@ -766,7 +927,9 @@ def init_retrain_route():
             )
         
         try:
-            versions = list_model_versions(model)
+            # Convertir 'hojas' a 'formas' para el sistema de versionado
+            versioning_model_name = 'formas' if model == 'hojas' else model
+            versions = list_model_versions(versioning_model_name)
             return {
                 "model": model,
                 "total_versions": len(versions),
@@ -799,7 +962,9 @@ def init_retrain_route():
             )
         
         try:
-            version_info = get_version_info(model, version)
+            # Convertir 'hojas' a 'formas' para el sistema de versionado
+            versioning_model_name = 'formas' if model == 'hojas' else model
+            version_info = get_version_info(versioning_model_name, version)
             if version_info is None:
                 raise HTTPException(
                     status_code=404,
@@ -845,12 +1010,16 @@ def init_retrain_route():
             )
         
         try:
-            restore_result = restore_model_version(model, version)
+            # Convertir 'hojas' a 'formas' para el sistema de versionado
+            versioning_model_name = 'formas' if model == 'hojas' else model
+            restore_result = restore_model_version(versioning_model_name, version)
             
             # Recargar el modelo restaurado en el sistema global
             print(f"Recargando modelo {model} restaurado en el sistema de predicción...")
             try:
-                reload_model(model)
+                # Convertir 'hojas' a 'formas' para reload_model
+                reload_model_name = 'formas' if model == 'hojas' else model
+                reload_model(reload_model_name)
                 print(f"✅ Modelo {model} restaurado y recargado correctamente.")
                 restore_result['reloaded'] = True
             except Exception as reload_error:

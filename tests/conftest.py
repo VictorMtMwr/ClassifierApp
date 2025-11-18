@@ -62,14 +62,23 @@ def mock_image_file(sample_image_bytes):
 
 
 @pytest.fixture
-def app_with_mocked_models(mock_models):
+def app_with_mocked_models(mock_models, mock_config, sample_model_file, sample_model_file_formas, sample_model_file_plantas):
     """Crea una instancia de la app con modelos mockeados"""
-    with patch('app.models_loader.load_models', return_value=mock_models):
+    # Asegurar que los modelos de prueba existen en el directorio mock
+    # (ya están creados por los fixtures sample_model_file*)
+    
+    # Parchear los directorios ANTES de importar la app
+    # Esto evita que se intenten cargar modelos reales
+    with patch('app.config.MODEL_DIR', mock_config['MODEL_DIR']), \
+         patch('app.config.BACKUP_DIR', mock_config['BACKUP_DIR']), \
+         patch('app.config.DATA_DIR', mock_config['DATA_DIR']), \
+         patch('app.models_loader.MODEL_DIR', mock_config['MODEL_DIR']), \
+         patch('app.models_loader.load_models', return_value=mock_models), \
+         patch('app.models_loader.get_models', return_value=mock_models):
+        # Importar después de parchear para que use los valores parcheados
         from app import create_app
         app = create_app()
-        # También mockear get_models para que devuelva los modelos mock
-        with patch('app.models_loader.get_models', return_value=mock_models):
-            yield app
+        yield app
 
 
 @pytest.fixture
@@ -96,7 +105,7 @@ def mock_model_dir(temp_dir):
 
 @pytest.fixture
 def sample_model_file(mock_model_dir):
-    """Crea un archivo de modelo de prueba"""
+    """Crea un archivo de modelo de prueba para especies"""
     # Crear un modelo simple de TensorFlow y guardarlo
     model = tf.keras.Sequential([
         tf.keras.layers.Dense(10, activation='softmax', input_shape=(128, 128, 3))
@@ -104,6 +113,40 @@ def sample_model_file(mock_model_dir):
     model_path = os.path.join(mock_model_dir, "modelo_especies.h5")
     model.save(model_path)
     return model_path
+
+
+@pytest.fixture
+def sample_model_file_formas(mock_model_dir):
+    """Crea un archivo de modelo de prueba para formas (hojas)"""
+    # Crear un modelo simple de TensorFlow y guardarlo
+    model = tf.keras.Sequential([
+        tf.keras.layers.Dense(7, activation='softmax', input_shape=(128, 128, 3))
+    ])
+    model_path = os.path.join(mock_model_dir, "modelo_hojas.h5")
+    model.save(model_path)
+    return model_path
+
+
+@pytest.fixture
+def sample_model_file_plantas(mock_model_dir):
+    """Crea un archivo de modelo de prueba para plantas"""
+    # Crear un modelo simple de TensorFlow y guardarlo
+    model = tf.keras.Sequential([
+        tf.keras.layers.Dense(2, activation='softmax', input_shape=(128, 128, 3))
+    ])
+    model_path = os.path.join(mock_model_dir, "modelo_plantas.h5")
+    model.save(model_path)
+    return model_path
+
+
+@pytest.fixture
+def all_sample_model_files(mock_model_dir, sample_model_file, sample_model_file_formas, sample_model_file_plantas):
+    """Crea todos los archivos de modelo de prueba"""
+    return {
+        'especies': sample_model_file,
+        'formas': sample_model_file_formas,
+        'plantas': sample_model_file_plantas
+    }
 
 
 @pytest.fixture

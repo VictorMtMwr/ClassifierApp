@@ -1,0 +1,15 @@
+{
+  "versions": [
+    {
+      "version": 1,
+      "timestamp": "2025-11-18T15:07:37.849958",
+      "timestamp_str": "20251118T150737",
+      "filename": "modelo_hojas_v0001_20251118T150737.h5",
+      "path": "/home/victormtmwr/Descargas/ClassifierApp/backups/modelo_hojas_v0001_20251118T150737.h5",
+      "notes": "Versión inicial del modelo formas - Backup automático antes del sistema de versionado",
+      "size_bytes": 32453232
+    }
+  ],
+  "current_version": 1,
+  "last_updated": "2025-11-18T15:07:37.849958"
+}

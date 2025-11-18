@@ -1,4 +1,16 @@
 {
-  "versions": [],
-  "current_version": null
+  "versions": [
+    {
+      "version": 1,
+      "timestamp": "2025-11-18T17:13:57.040856",
+      "timestamp_str": "20251118T171357",
+      "filename": "modelo_especies_v0001_20251118T171357.h5",
+      "path": "/home/victormtmwr/Descargas/ClassifierApp/backups/modelo_especies_v0001_20251118T171357.h5",
+      "notes": "Reentrenamiento automático - 2025-11-18 17:13:57",
+      "size_bytes": 32471648,
+      "source_path": "/home/victormtmwr/Descargas/ClassifierApp/app/../models/modelo_especies_v0001_20251118T150737.h5"
+    }
+  ],
+  "current_version": 1,
+  "last_updated": "2025-11-18T17:13:57.040856"
 }
