@@ -2,14 +2,14 @@
   "versions": [
     {
       "version": 1,
-      "timestamp": "2025-11-18T15:07:37",
       "timestamp_str": "20251118T150737",
       "filename": "modelo_especies_v0001_20251118T150737.h5",
-      "path": "/home/victormtmwr/Descargas/ClassifierApp/backups/modelo_especies_v0001_20251118T150737.h5",
-      "notes": "Reentrenamiento automático - 2025-11-18 15:07:37",
-      "size_bytes": 32471648
+      "path": "/home/calvi/projects/leaf_classifier/classifier/backups/modelo_especies_v0001_20251118T150737.h5",
+      "timestamp": "2025-11-18T15:07:37",
+      "size_bytes": 32471648,
+      "notes": "Versión detectada automáticamente - 2025-11-18T15:07:37"
     }
   ],
   "current_version": 1,
-  "last_updated": "2025-11-18T15:07:37"
+  "last_updated": "2025-11-19T02:16:00.328257"
 }
